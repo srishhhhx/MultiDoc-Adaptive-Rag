@@ -26,6 +26,8 @@ FAISS_COLLECTION_NAME = "rag-faiss"
 LLM_TEMPERATURE = 0
 TAVILY_SEARCH_RESULTS = 2
 
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
 # Supported File Types
 SUPPORTED_EXTENSIONS = [
     "pdf",

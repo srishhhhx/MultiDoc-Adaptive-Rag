@@ -16,7 +16,7 @@ load_dotenv()
 
 # Initialize the LLM
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-pro", google_api_key=os.environ["GOOGLE_API_KEY"], temperature=0.1
+    model="gemini-pro", google_api_key=os.environ["GOOGLE_API_KEY"], temperature=0.1
 )
 
 # Query classification prompt

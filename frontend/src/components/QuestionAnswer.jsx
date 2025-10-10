@@ -278,7 +278,7 @@ const QuestionAnswer = ({ sessionId }) => {
                           }`}>
                             {idx + 1}
                           </div>
-                          <span className="text-white text-[17px] font-semibold" style={{fontFamily: 'Product Sans, sans-serif'}}>Document {idx + 1}</span>
+                          <span className="text-white text-[17px] font-semibold" style={{fontFamily: 'Product Sans, sans-serif'}}>Retrieved Chunk {idx + 1}</span>
                         </div>
                         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${
                           evaluation.score.toLowerCase() === 'yes' 
@@ -322,23 +322,23 @@ const QuestionAnswer = ({ sessionId }) => {
                                     cy="32"
                                     r="28"
                                     stroke={
-                                      evaluation.relevance_score >= 0.7 
+                                      evaluation.relevance_score >= 70 
                                         ? '#22c55e'
-                                        : evaluation.relevance_score >= 0.4
+                                        : evaluation.relevance_score >= 40
                                         ? '#fbbf24'
                                         : '#ff6b6b'
                                     }
                                     strokeWidth="6"
                                     fill="none"
                                     strokeDasharray={`${2 * Math.PI * 28}`}
-                                    strokeDashoffset={`${2 * Math.PI * 28 * (1 - evaluation.relevance_score)}`}
+                                    strokeDashoffset={`${2 * Math.PI * 28 * (1 - evaluation.relevance_score / 100)}`}
                                     strokeLinecap="round"
                                     className="transition-all duration-1000 ease-out"
                                     style={{
                                       filter: `drop-shadow(0 0 6px ${
-                                        evaluation.relevance_score >= 0.7 
+                                        evaluation.relevance_score >= 70 
                                           ? 'rgba(34, 197, 94, 0.6)'
-                                          : evaluation.relevance_score >= 0.4
+                                          : evaluation.relevance_score >= 40
                                           ? 'rgba(251, 191, 36, 0.6)'
                                           : 'rgba(255, 107, 107, 0.6)'
                                       })`
@@ -348,27 +348,27 @@ const QuestionAnswer = ({ sessionId }) => {
                                 {/* Center percentage */}
                                 <div className="absolute inset-0 flex items-center justify-center">
                                   <span className={`text-sm font-black ${
-                                    evaluation.relevance_score >= 0.7 
+                                    evaluation.relevance_score >= 70 
                                       ? 'text-[#22c55e]'
-                                      : evaluation.relevance_score >= 0.4
+                                      : evaluation.relevance_score >= 40
                                       ? 'text-[#fbbf24]'
                                       : 'text-[#ff6b6b]'
                                   }`}>
-                                    {(evaluation.relevance_score * 100).toFixed(0)}
+                                    {evaluation.relevance_score}
                                   </span>
                                 </div>
                               </div>
                               
                               {/* Status indicator */}
                               <div className={`px-3 py-1.5 rounded-lg ${
-                                evaluation.relevance_score >= 0.7 
+                                evaluation.relevance_score >= 70 
                                   ? 'bg-[#22c55e]/10 text-[#22c55e]'
-                                  : evaluation.relevance_score >= 0.4
+                                  : evaluation.relevance_score >= 40
                                   ? 'bg-[#fbbf24]/10 text-[#fbbf24]'
                                   : 'bg-[#ff6b6b]/10 text-[#ff6b6b]'
                               }`}>
                                 <div className="text-[10px] font-bold uppercase tracking-wider">
-                                  {evaluation.relevance_score >= 0.7 ? 'High' : evaluation.relevance_score >= 0.4 ? 'Medium' : 'Low'}
+                                  {evaluation.relevance_score >= 70 ? 'High' : evaluation.relevance_score >= 40 ? 'Medium' : 'Low'}
                                 </div>
                               </div>
                             </div>

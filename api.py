@@ -7,7 +7,7 @@ This API provides endpoints for:
 - Real-time status updates
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -63,13 +63,13 @@ class SessionAwareDocumentProcessor(DocumentProcessor):
             # Process file for session
             result = self.process_file_for_session(file_path, filename, session.collection_name)
             
-            # Update session with retriever and document metadata
             session_manager.set_session_retriever(session_id, result['retriever'])
             
             file_metadata = {
                 'filename': filename,
                 'chunks': result['chunks'],
-                'processed_at': datetime.now().isoformat()
+                'processed_at': datetime.now().isoformat(),
+                'status': 'success'
             }
             session_manager.add_document_to_session(session_id, file_metadata)
             
@@ -81,11 +81,72 @@ class SessionAwareDocumentProcessor(DocumentProcessor):
                 'success': True
             }
             
+        except ValueError as e:
+            # Handle cases where file couldn't be processed (empty chunks, etc.)
+            logger.error(f"Validation error processing file {filename} for session {session_id}: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"File processing validation failed for {filename}: {str(e)}")
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error processing file for session: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+            logger.error(f"Error processing file for session {session_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error processing file for session {session_id}: {str(e)}")
+    
+    def process_multiple_files_for_session_api(self, file_paths_and_names: List[tuple], session_id: str):
+        """Process multiple files for a specific session in batch"""
+        try:
+            # Get session data
+            session = session_manager.get_session(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            
+            # Process all files in batch
+            result = self.process_multiple_files_for_session(file_paths_and_names, session.collection_name)
+            
+            # Update session with retriever
+            session_manager.set_session_retriever(session_id, result['retriever'])
+            
+            # Add metadata for each file to session (only successful ones)
+            successful_files = 0
+            for file_meta in result['file_metadata']:
+                file_metadata = {
+                    'filename': file_meta['filename'],
+                    'chunks': file_meta['chunks'],
+                    'processed_at': datetime.now().isoformat(),
+                    'status': file_meta.get('status', 'unknown')
+                }
+                # Only add successful files to session
+                if file_meta.get('status') == 'success':
+                    session_manager.add_document_to_session(session_id, file_metadata)
+                    successful_files += 1
+            
+            # Log processing results
+            failed_count = len(result.get('failed_files', []))
+            if failed_count > 0:
+                logger.warning(f"Batch processing completed with {failed_count} failed files for session {session_id}")
+            else:
+                logger.info(f"All files processed successfully for session {session_id}: {len(file_paths_and_names)} files")
+            
+            return {
+                'session_id': session_id,
+                'total_files': len(file_paths_and_names),
+                'successful_files': successful_files,
+                'failed_files': failed_count,
+                'total_chunks': result['total_chunks'],
+                'file_metadata': result['file_metadata'],
+                'failed_file_names': result.get('failed_files', []),
+                'success': True,
+                'partial_success': failed_count > 0
+            }
+            
+        except ValueError as e:
+            # Handle cases where no files could be processed
+            logger.error(f"Validation error processing files for session {session_id}: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"File processing validation failed: {str(e)}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error processing multiple files for session {session_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 document_processor = SessionAwareDocumentProcessor(document_loader)
 
@@ -93,7 +154,12 @@ class SessionAwareRAGWorkflow(RAGWorkflow):
     """RAG workflow with session management support"""
     
     def __init__(self):
+        super().__init__()
         self.graph = None
+    
+    def _create_graph(self):
+        """Create the graph instance - alias for create_workflow for compatibility"""
+        return self.create_workflow()
     
     def get_graph(self):
         """Get or create the graph instance"""
@@ -119,15 +185,20 @@ class SessionAwareRAGWorkflow(RAGWorkflow):
             logger.error(f"Retriever test failed: {e}")
             raise HTTPException(status_code=500, detail=f"Retriever error: {str(e)}")
         
-        # Set retriever for this request
+        # Set retriever and session ID for this request
         self.set_retriever(retriever)
+        self.set_session_id(session_id)  # NEW: Set session ID for document access
         
         # Get conversation context (for future use)
         # context = session_manager.get_conversation_context(session_id)
         
-        # Process through graph
+        # Process through graph with proper state initialization
         graph = self.get_graph()
-        result = graph.invoke(input={"question": question})
+        result = graph.invoke(input={
+            "question": question, 
+            "original_question": question,  # Preserve original for context assessment
+            "rewrite_attempts": 0
+        })
         
         # Create conversation exchange
         exchange = ConversationExchange(
@@ -329,10 +400,10 @@ async def upload_document(
 @app.post("/api/upload-multiple")
 async def upload_multiple_documents(
     files: List[UploadFile] = File(...),
-    session_id: Optional[str] = None
+    session_id: Optional[str] = Form(None)
 ):
     """
-    Upload and process multiple documents for a session
+    Upload and process multiple documents for a session using batch processing
     
     Supports: PDF, DOCX, TXT, CSV, XLSX
     If no session_id provided, creates a new session
@@ -343,9 +414,10 @@ async def upload_multiple_documents(
             session_id = session_manager.create_session()
             logger.info(f"Created new session for multi-upload: {session_id}")
         
-        results = []
-        total_chunks = 0
+        # Step 1: Validate all files and create temporary files
+        temp_files = []
         failed_files = []
+        file_paths_and_names = []
         
         for file in files:
             try:
@@ -365,53 +437,80 @@ async def upload_multiple_documents(
                 file_size = len(content)
                 
                 # Create temporary file
-                with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}") as tmp_file:
-                    tmp_file.write(content)
-                    tmp_file_path = tmp_file.name
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}")
+                tmp_file.write(content)
+                tmp_file.close()
                 
-                try:
-                    # Process the file for session
-                    result = document_processor.process_file_for_session_api(tmp_file_path, filename, session_id)
-                    
-                    # Format size for display
-                    size_mb = file_size / (1024 * 1024)
-                    size_display = f"{size_mb:.1f}MB" if size_mb >= 1 else f"{file_size / 1024:.0f}KB"
-                    
-                    # Add document metadata to session
-                    document_metadata = {
-                        'filename': filename,
-                        'size': size_display,
-                        'chunks': result['chunks'],
-                        'uploadedAt': datetime.now().isoformat(),
-                        'chunks_data': result.get('chunks_data', [])  # Store chunks for rebuilding
-                    }
-                    session_manager.add_document_to_session(session_id, document_metadata)
-                    
-                    results.append({
-                        "filename": filename,
-                        "size": size_display,
-                        "chunks": result['chunks'],
-                        "success": True
-                    })
-                    total_chunks += result['chunks']
-                    
-                finally:
-                    # Clean up temp file
-                    try:
-                        os.unlink(tmp_file_path)
-                    except OSError:
-                        logger.warning(f"Could not delete temp file: {tmp_file_path}")
-                        
+                # Store temp file info for cleanup
+                temp_files.append({
+                    'path': tmp_file.name,
+                    'filename': filename,
+                    'size': file_size
+                })
+                
+                # Add to processing list
+                file_paths_and_names.append((tmp_file.name, filename))
+                
             except Exception as e:
-                logger.error(f"Error processing file {filename}: {str(e)}")
+                logger.error(f"Error preparing file {filename}: {str(e)}")
                 failed_files.append({
                     "filename": filename,
                     "error": str(e)
                 })
         
+        # Step 2: Process all valid files in batch
+        results = []
+        total_chunks = 0
+        
+        if file_paths_and_names:
+            try:
+                # Process all files in a single batch operation
+                batch_result = document_processor.process_multiple_files_for_session_api(
+                    file_paths_and_names, session_id
+                )
+                
+                # Format results for response
+                for i, temp_file_info in enumerate(temp_files):
+                    if temp_file_info['filename'] in [name for _, name in file_paths_and_names]:
+                        # Find matching file metadata
+                        file_meta = next(
+                            (fm for fm in batch_result['file_metadata'] if fm['filename'] == temp_file_info['filename']),
+                            {'filename': temp_file_info['filename'], 'chunks': 0}
+                        )
+                        
+                        # Format size for display
+                        size_mb = temp_file_info['size'] / (1024 * 1024)
+                        size_display = f"{size_mb:.1f}MB" if size_mb >= 1 else f"{temp_file_info['size'] / 1024:.0f}KB"
+                        
+                        results.append({
+                            "filename": temp_file_info['filename'],
+                            "size": size_display,
+                            "chunks": file_meta['chunks'],
+                            "success": True
+                        })
+                
+                total_chunks = batch_result['total_chunks']
+                logger.info(f"Batch processing completed: {len(results)} files, {total_chunks} total chunks")
+                
+            except Exception as e:
+                logger.error(f"Error in batch processing: {str(e)}")
+                # Add all files to failed list if batch processing fails
+                for _, filename in file_paths_and_names:
+                    failed_files.append({
+                        "filename": filename,
+                        "error": f"Batch processing failed: {str(e)}"
+                    })
+        
+        # Step 3: Clean up temporary files
+        for temp_file_info in temp_files:
+            try:
+                os.unlink(temp_file_info['path'])
+            except OSError:
+                logger.warning(f"Could not delete temp file: {temp_file_info['path']}")
+        
         return JSONResponse(content={
             "success": True,
-            "message": f"Processed {len(results)} files successfully",
+            "message": f"Processed {len(results)} files successfully using batch processing",
             "session_id": session_id,
             "total_chunks": total_chunks,
             "successful_uploads": results,
@@ -460,15 +559,26 @@ async def ask_question(request: QuestionRequest):
         
         # Add evaluation data if available
         if 'document_evaluations' in result and result['document_evaluations']:
-            response['document_evaluations'] = [
-                {
-                    'score': eval.score,
-                    'relevance_score': getattr(eval, 'relevance_score', None),
-                    'coverage_assessment': getattr(eval, 'coverage_assessment', None),
-                    'missing_information': getattr(eval, 'missing_information', None)
-                }
-                for eval in result['document_evaluations']
-            ]
+            response['document_evaluations'] = []
+            for eval in result['document_evaluations']:
+                # Handle both old object format and new dictionary format
+                if isinstance(eval, dict):
+                    # New batch analysis format (dictionary)
+                    eval_data = {
+                        'score': eval.get('score', 'NO'),
+                        'relevance_score': eval.get('relevance_score', None),
+                        'coverage_assessment': eval.get('coverage_assessment', None),
+                        'missing_information': eval.get('missing_information', None)
+                    }
+                else:
+                    # Old individual evaluation format (object)
+                    eval_data = {
+                        'score': getattr(eval, 'score', 'NO'),
+                        'relevance_score': getattr(eval, 'relevance_score', None),
+                        'coverage_assessment': getattr(eval, 'coverage_assessment', None),
+                        'missing_information': getattr(eval, 'missing_information', None)
+                    }
+                response['document_evaluations'].append(eval_data)
         
         # Add relevance scores
         if 'question_relevance_score' in result:

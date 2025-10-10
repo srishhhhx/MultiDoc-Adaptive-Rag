@@ -9,7 +9,7 @@ const FileUploader = ({ onUploadSuccess, sessionId, isAddMode = false }) => {
   const [uploadResults, setUploadResults] = useState([]);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
   
-  // For backward compatibility in add mode
+  // For backward compatibility in add mode (keep for legacy code)
   const file = files[0] || null;
   const uploadResult = uploadResults[0] || null;
 
@@ -166,7 +166,7 @@ const FileUploader = ({ onUploadSuccess, sessionId, isAddMode = false }) => {
     return (
       <div className="w-full">
         <div className="bg-[#0f0f0f] border border-[#333] rounded-xl p-4">
-          {!file && !uploadResult && (
+          {files.length === 0 && uploadResults.length === 0 && (
             <div
               className={`border-2 border-dashed ${isDragOver ? 'border-[#444]' : 'border-[#2a2a2a]'} rounded-lg p-4 text-center transition-colors duration-200`}
               onDrop={handleDrop}
@@ -179,6 +179,7 @@ const FileUploader = ({ onUploadSuccess, sessionId, isAddMode = false }) => {
                 id="file-input-add"
                 className="hidden"
                 accept=".pdf,.docx,.txt,.csv,.xlsx"
+                multiple
               />
               <label htmlFor="file-input-add" className="cursor-pointer block">
                 <div className="text-[#aaa] text-[13px] font-medium">
@@ -188,47 +189,56 @@ const FileUploader = ({ onUploadSuccess, sessionId, isAddMode = false }) => {
             </div>
           )}
           
-          {file && !uploadResult && (
+          {files.length > 0 && uploadResults.length === 0 && (
             <div className="space-y-3">
-              <div className="bg-[#1a1a1a] border border-[#333] rounded-lg p-3 flex items-center justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="text-white text-[13px] font-semibold truncate">
-                    {file.name}
+              {/* Show all selected files */}
+              <div className="space-y-2 max-h-32 overflow-y-auto">
+                {files.map((file, index) => (
+                  <div key={index} className="bg-[#1a1a1a] border border-[#333] rounded-lg p-3 flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white text-[13px] font-semibold truncate">
+                        {file.name}
+                      </div>
+                      <div className="text-[#666] text-[11px]">
+                        {formatSize(file.size)}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => removeFile(index)}
+                      className="text-[#666] hover:text-white text-lg px-2"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <div className="text-[#666] text-[11px]">
-                    {formatSize(file.size)}
-                  </div>
-                </div>
-                <button
-                  onClick={() => setFiles([])}
-                  className="text-[#666] hover:text-white text-lg px-2"
-                >
-                  ×
-                </button>
+                ))}
               </div>
               <button
                 onClick={handleUpload}
                 disabled={uploading}
                 className="w-full bg-[#22c55e] hover:bg-[#16a34a] text-white text-[13px] font-semibold py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
               >
-                {uploading ? 'Uploading...' : 'Upload'}
+                {uploading ? `Uploading ${files.length} file${files.length > 1 ? 's' : ''}...` : `Upload ${files.length} file${files.length > 1 ? 's' : ''}`}
               </button>
             </div>
           )}
           
-          {uploadResult && (
+          {uploadResults.length > 0 && (
             <div className="text-center">
               <div className="text-[#22c55e] text-[13px] font-semibold mb-2">
-                ✓ {uploadResult.metadata.filename} added!
+                ✓ {uploadResults.length} file{uploadResults.length > 1 ? 's' : ''} added successfully!
+              </div>
+              <div className="text-[#888] text-[11px] mb-3">
+                {uploadResults.map(result => result.filename).join(', ')}
               </div>
               <button
                 onClick={() => {
                   setUploadResults([]);
                   setFiles([]);
+                  setError(null);
                 }}
                 className="text-[#aaa] text-[12px] hover:text-white"
               >
-                Add another
+                Add more documents
               </button>
             </div>
           )}

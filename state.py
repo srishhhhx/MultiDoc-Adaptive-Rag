@@ -30,6 +30,7 @@ class GraphState(TypedDict):
     """
     
     question: str
+    original_question: Optional[str]  # Preserve user's original query for context assessment
     solution: str
     online_search: bool
     documents: List[str]
@@ -37,3 +38,18 @@ class GraphState(TypedDict):
     document_evaluations: Optional[List[Dict[str, Any]]]  # Store document evaluation results
     document_relevance_score: Optional[Dict[str, Any]]  # Store document relevance check
     question_relevance_score: Optional[Dict[str, Any]]  # Store question relevance check
+    
+    # New fields for Query Analysis Router
+    execution_plan: Optional[List[Dict[str, str]]]  # List of tasks with tool and query
+    vectorstore_results: Optional[List[str]]  # Results from vectorstore retrieval tasks
+    web_search_results: Optional[List[str]]  # Results from web search tasks
+    combined_context: Optional[str]  # Combined context from all tools
+    metadata: Optional[Dict[str, Any]]  # Extracted metadata from query analysis
+    
+    # Circuit breaker for infinite loop prevention
+    generation_attempts: Optional[int]  # Track number of answer generation attempts
+    rewrite_attempts: Optional[int]  # Track number of query rewrite attempts
+    
+    # Query rewriting loop fields
+    context_assessment: Optional[str]  # Result of context sufficiency assessment ("sufficient" or "insufficient")
+    rerank_completed: Optional[bool]  # Flag to indicate if reranking was successfully completed

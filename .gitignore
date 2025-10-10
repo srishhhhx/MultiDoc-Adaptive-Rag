@@ -10,7 +10,7 @@ yarn-error.log*
 # but can be ignored if you prefer to regenerate it.
 # For this project, given the multiple package-lock.json files,
 # it's safer to ignore them at the root and let sub-projects manage their own.
-package-lock.json
+# package-lock.json
 
 # Python
 __pycache__/
@@ -25,3 +25,6 @@ faiss_indexes/
 
 # Logs
 *.log
+
+tests/
+
