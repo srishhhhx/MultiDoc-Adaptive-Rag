@@ -28,3 +28,6 @@ faiss_indexes/
 
 tests/
 
+venv
+
+
