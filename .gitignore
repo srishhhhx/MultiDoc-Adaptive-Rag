@@ -30,4 +30,7 @@ tests/
 
 venv
 
+md_files/
+screenshots/
 
+IMPLEMENTATION_CHANGELOG.md
