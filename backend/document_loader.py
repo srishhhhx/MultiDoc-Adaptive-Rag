@@ -10,7 +10,7 @@ from pathlib import Path
 import logging
 
 from langchain_core.documents import Document
-from multimodal_loader import MultiFormatDocumentLoader as BaseMultiFormatLoader
+from backend.multimodal_loader import MultiFormatDocumentLoader as BaseMultiFormatLoader
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

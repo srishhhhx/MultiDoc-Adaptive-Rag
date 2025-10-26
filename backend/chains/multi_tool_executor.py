@@ -10,7 +10,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
 from langchain_community.tools.tavily_search import TavilySearchResults
-from config import TAVILY_SEARCH_RESULTS
+from backend.config import TAVILY_SEARCH_RESULTS
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -55,14 +55,18 @@ class MultiToolExecutor:
         web_search_results = []
         
         for i, task in enumerate(execution_plan):
-            tool = task["tool"]
-            query = task["query"]
+            tool = task.get("tool")
+            query = task.get("query")
+            task_source_document = task.get("source_document")  # NEW: Get source_document from task
             
             logger.info(f"Executing task {i+1}/{len(execution_plan)}: {tool} - {query}")
+            if task_source_document:
+                logger.info(f"   🎯 Task-specific source filter: {task_source_document}")
             
             try:
                 if tool == "vectorstore_retrieval":
-                    result = self._execute_vectorstore_task(query, metadata)
+                    # **CRITICAL CHANGE: Pass task-specific source_document**
+                    result = self._execute_vectorstore_task(query, metadata, task_source_document)
                     if result:
                         vectorstore_results.extend(result)
                         
@@ -88,13 +92,14 @@ class MultiToolExecutor:
             "total_sources": len(vectorstore_results) + len(web_search_results)
         }
     
-    def _execute_vectorstore_task(self, query: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[List[Document]]:
+    def _execute_vectorstore_task(self, query: str, metadata: Optional[Dict[str, Any]] = None, task_source_document: Optional[str] = None) -> Optional[List[Document]]:
         """
         Execute a vectorstore retrieval task with metadata-aware optimization
         
         Args:
             query: The search query for the vectorstore
-            metadata: Extracted metadata for optimization
+            metadata: Extracted metadata for optimization (legacy)
+            task_source_document: Task-specific source document filter (NEW)
             
         Returns:
             List of retrieved documents or None if no retriever available
@@ -103,8 +108,8 @@ class MultiToolExecutor:
             logger.warning("No vectorstore retriever available")
             return None
         
-        # CRITICAL: Check for metadata-based optimization
-        source_document = metadata.get("source_document") if metadata else None
+        # **CRITICAL CHANGE: Prioritize task-specific source_document over global metadata**
+        source_document = task_source_document or (metadata.get("source_document") if metadata else None)
         
         if source_document and self.self_query_retriever:
             # OPTIMIZED PATH: Use direct metadata filter, skip Self-Query LLM call
@@ -139,7 +144,37 @@ class MultiToolExecutor:
                 logger.info("   Falling back to Self-Query retriever")
                 # Fall through to Self-Query retriever
         
-        # FALLBACK PATH: Use Self-Query retriever or basic retriever
+        # **NEW FALLBACK PATH: Try basic retriever with metadata filter if source_document specified**
+        if source_document and not self.self_query_retriever:
+            logger.info(f"🎯 BASIC RETRIEVER + FILTER: Attempting metadata filter for document '{source_document}'")
+            try:
+                # Try to use the basic retriever with metadata filtering
+                if hasattr(self.retriever, 'vectorstore'):
+                    # Access underlying vectorstore for filtering
+                    vectorstore = self.retriever.vectorstore
+                    metadata_filter = {"source": source_document}
+                    documents = vectorstore.similarity_search(
+                        query, 
+                        k=20,  # Get more documents for reranking
+                        filter=metadata_filter
+                    )
+                    logger.info(f"✅ Basic retriever with filter returned {len(documents)} documents")
+                    logger.info(f"   Filter applied: {metadata_filter}")
+                    
+                    # Log document previews for debugging
+                    for i, doc in enumerate(documents[:3]):  # Show first 3 docs
+                        preview = doc.page_content[:100] + "..." if len(doc.page_content) > 100 else doc.page_content
+                        source = doc.metadata.get("source", "unknown")
+                        logger.info(f"   Doc {i+1} (source: {source}): {preview}")
+                    
+                    return documents
+                else:
+                    logger.warning("   Basic retriever doesn't support metadata filtering - falling back to unfiltered search")
+            except Exception as e:
+                logger.error(f"❌ Error in basic retriever metadata filtering: {e}")
+                logger.info("   Falling back to unfiltered basic retrieval")
+        
+        # ORIGINAL FALLBACK PATH: Use Self-Query retriever or basic retriever
         try:
             if self.self_query_retriever and not source_document:
                 logger.info(f"🔍 Using Self-Query retriever for: {query}")

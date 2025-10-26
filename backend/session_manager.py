@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
-from config import FAISS_INDEX_DIR
+from backend.config import FAISS_INDEX_DIR
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

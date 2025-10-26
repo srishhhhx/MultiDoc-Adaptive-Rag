@@ -11,7 +11,7 @@ import logging
 from typing import List, Dict, Any
 from langchain_core.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from config import GOOGLE_API_KEY
+from backend.config import GOOGLE_API_KEY
 
 logger = logging.getLogger(__name__)
 

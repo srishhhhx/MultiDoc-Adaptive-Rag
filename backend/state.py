@@ -53,3 +53,8 @@ class GraphState(TypedDict):
     # Query rewriting loop fields
     context_assessment: Optional[str]  # Result of context sufficiency assessment ("sufficient" or "insufficient")
     rerank_completed: Optional[bool]  # Flag to indicate if reranking was successfully completed
+    
+    # Relevance score caching for API optimization
+    cached_document_relevance: Optional[Dict[str, Any]]  # Cached document relevance score
+    cached_question_relevance: Optional[Dict[str, Any]]  # Cached question relevance score
+    cache_context_signature: Optional[str]  # Hash of context used for cache validation

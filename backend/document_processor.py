@@ -6,13 +6,15 @@ and FAISS vector database operations for the RAG system.
 """
 
 import os
+import pickle
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.documents import Document
 
-from config import FAISS_INDEX_DIR, FAISS_COLLECTION_NAME
+from backend.config import FAISS_INDEX_DIR, FAISS_COLLECTION_NAME
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +34,158 @@ class DocumentProcessor:
         # Ensure FAISS directory exists
         os.makedirs(FAISS_INDEX_DIR, exist_ok=True)
         logger.info(f"FAISS index directory: {FAISS_INDEX_DIR}")
+        
+        # **NEW: Persistent chunk store infrastructure**
+        self.chunk_store_dir = os.path.join(FAISS_INDEX_DIR, "chunk_stores")
+        os.makedirs(self.chunk_store_dir, exist_ok=True)
+        logger.info(f"Chunk store directory: {self.chunk_store_dir}")
+
+    def _get_chunk_store_path(self, collection_name: str) -> str:
+        """Get the file path for a session's chunk store"""
+        return os.path.join(self.chunk_store_dir, f"{collection_name}_chunks.pkl")
+
+    def _load_chunk_store(self, collection_name: str) -> List[Document]:
+        """
+        Load existing chunks from the persistent chunk store
+        
+        Args:
+            collection_name: Session collection name
+            
+        Returns:
+            List of Document chunks or empty list if store doesn't exist
+        """
+        chunk_store_path = self._get_chunk_store_path(collection_name)
+        
+        if os.path.exists(chunk_store_path):
+            try:
+                with open(chunk_store_path, "rb") as f:
+                    chunks = pickle.load(f)
+                logger.info(f"📦 Loaded {len(chunks)} chunks from store: {collection_name}")
+                return chunks
+            except Exception as e:
+                logger.error(f"❌ Error loading chunk store {collection_name}: {e}")
+                return []
+        else:
+            logger.info(f"📦 No existing chunk store found for: {collection_name}")
+            return []
+
+    def _save_chunk_store(self, collection_name: str, chunks: List[Document]) -> bool:
+        """
+        Save chunks to the persistent chunk store
+        
+        Args:
+            collection_name: Session collection name
+            chunks: List of Document chunks to save
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        chunk_store_path = self._get_chunk_store_path(collection_name)
+        
+        try:
+            with open(chunk_store_path, "wb") as f:
+                pickle.dump(chunks, f)
+            logger.info(f"💾 Saved {len(chunks)} chunks to store: {collection_name}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error saving chunk store {collection_name}: {e}")
+            return False
+
+    def _delete_chunk_store(self, collection_name: str) -> bool:
+        """
+        Delete the chunk store file for a session
+        
+        Args:
+            collection_name: Session collection name
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        chunk_store_path = self._get_chunk_store_path(collection_name)
+        
+        try:
+            if os.path.exists(chunk_store_path):
+                os.remove(chunk_store_path)
+                logger.info(f"🗑️  Deleted chunk store: {collection_name}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error deleting chunk store {collection_name}: {e}")
+            return False
+
+    def delete_document_from_session(self, collection_name: str, filename_to_delete: str) -> bool:
+        """
+        Delete a specific document's chunks from the persistent chunk store and rebuild index
+        
+        Args:
+            collection_name: Session collection name
+            filename_to_delete: Name of the file to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"🗑️  DELETING DOCUMENT: '{filename_to_delete}' from session '{collection_name}'")
+            
+            # **STEP 1: Load all chunks from persistent store**
+            logger.info("📦 Loading chunks from persistent store...")
+            all_chunks = self._load_chunk_store(collection_name)
+            
+            if not all_chunks:
+                logger.warning(f"No chunks found in store for {collection_name}")
+                return False
+            
+            # **STEP 2: Filter out chunks from the deleted document**
+            logger.info(f"🎯 Filtering out chunks from: {filename_to_delete}")
+            remaining_chunks = []
+            deleted_count = 0
+            
+            for chunk in all_chunks:
+                chunk_source = chunk.metadata.get("source")
+                if chunk_source == filename_to_delete:
+                    deleted_count += 1
+                    logger.debug(f"   Removing chunk from {filename_to_delete}")
+                else:
+                    remaining_chunks.append(chunk)
+            
+            logger.info(f"📊 Deletion results:")
+            logger.info(f"   Total chunks before: {len(all_chunks)}")
+            logger.info(f"   Chunks deleted: {deleted_count}")
+            logger.info(f"   Chunks remaining: {len(remaining_chunks)}")
+            
+            if deleted_count == 0:
+                logger.warning(f"No chunks found for document: {filename_to_delete}")
+                return False
+            
+            # **STEP 3: Handle empty session case**
+            if not remaining_chunks:
+                logger.info("📭 No chunks remaining - cleaning up session")
+                self._delete_faiss_index(collection_name)
+                self._delete_chunk_store(collection_name)
+                logger.info(f"✅ Cleaned up empty session: {collection_name}")
+                return True
+            
+            # **STEP 4: Save filtered chunks back to persistent store**
+            logger.info("💾 Saving remaining chunks to persistent store...")
+            if not self._save_chunk_store(collection_name, remaining_chunks):
+                logger.error("❌ Failed to save remaining chunks to persistent store")
+                return False
+            
+            # **STEP 5: Rebuild FAISS index from remaining chunks**
+            logger.info("🔄 Rebuilding FAISS index...")
+            self._delete_faiss_index(collection_name)
+            vectorstore = self._create_vector_database(remaining_chunks, collection_name)
+            
+            logger.info(f"✅ Successfully deleted document '{filename_to_delete}':")
+            logger.info(f"   Chunks deleted: {deleted_count}")
+            logger.info(f"   Chunks remaining: {len(remaining_chunks)}")
+            logger.info(f"   FAISS index rebuilt: ✅")
+            logger.info(f"   Persistent store updated: ✅")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error deleting document {filename_to_delete} from {collection_name}: {e}")
+            return False
 
     def clear_database(self):
         """Clear the FAISS database by removing index files"""
@@ -230,19 +384,41 @@ class DocumentProcessor:
                 logger.warning(f"Document loading failed or produced no content for file: {filename}")
                 raise ValueError(f"No content could be extracted from file: {filename}")
 
-            # Step 2: Split into chunks
+            # **CRITICAL CHANGE: Tag documents with source filename before chunking**
+            logger.info(f"🏷️  Tagging documents with source: {filename}")
+            for doc in documents:
+                if not hasattr(doc, 'metadata') or doc.metadata is None:
+                    doc.metadata = {}
+                doc.metadata["source"] = filename
+                logger.debug(f"   Tagged document with metadata: {doc.metadata}")
+
+            # Step 2: Split into chunks (metadata will be inherited by all chunks)
             logger.info("Splitting into chunks...")
-            doc_splits = self._create_document_chunks(documents)
-            logger.info(f"Created {len(doc_splits)} chunks")
+            new_doc_splits = self._create_document_chunks(documents)
+            logger.info(f"Created {len(new_doc_splits)} chunks")
             
             # Guard clause: Check if chunking produced no results
-            if not doc_splits:
+            if not new_doc_splits:
                 logger.warning(f"Document chunking produced no chunks for file: {filename}. File may be empty or contain only unsupported content.")
                 raise ValueError(f"No processable chunks could be created from file: {filename}")
 
-            # Step 3: Add to existing or create new FAISS index
-            logger.info("Adding to vector database...")
-            vectorstore = self._create_vector_database(doc_splits, collection_name)
+            # **CRITICAL CHANGE: Load existing chunks from persistent store**
+            logger.info("📦 Loading existing chunks from persistent store...")
+            existing_chunks = self._load_chunk_store(collection_name)
+            
+            # **CRITICAL CHANGE: Combine existing chunks with new chunks**
+            all_chunks = existing_chunks + new_doc_splits
+            logger.info(f"💾 Total chunks after adding new document: {len(all_chunks)} (existing: {len(existing_chunks)}, new: {len(new_doc_splits)})")
+            
+            # **CRITICAL CHANGE: Save updated chunks to persistent store**
+            logger.info("💾 Saving updated chunks to persistent store...")
+            if not self._save_chunk_store(collection_name, all_chunks):
+                logger.error("❌ Failed to save chunks to persistent store")
+                raise RuntimeError("Failed to save chunks to persistent store")
+
+            # Step 3: Create/rebuild FAISS index with ALL chunks (existing + new)
+            logger.info("🔄 Rebuilding FAISS index with all chunks...")
+            vectorstore = self._create_vector_database(all_chunks, collection_name)
 
             # Step 4: Create retriever with larger candidate pool
             retriever = vectorstore.as_retriever(
@@ -253,9 +429,10 @@ class DocumentProcessor:
 
             return {
                 'retriever': retriever,
-                'chunks': len(doc_splits),
+                'chunks': len(new_doc_splits),  # New chunks added in this operation
+                'total_chunks': len(all_chunks),  # Total chunks in the session
                 'vectorstore': vectorstore,
-                'chunks_data': doc_splits  # Store for potential rebuilding
+                'chunks_data': all_chunks  # All chunks for potential rebuilding
             }
 
         except Exception as e:
@@ -302,7 +479,15 @@ class DocumentProcessor:
                         })
                         continue
                     
-                    # Split into chunks
+                    # **CRITICAL CHANGE: Tag documents with source filename before chunking**
+                    logger.info(f"🏷️  Tagging documents with source: {filename}")
+                    for doc in documents:
+                        if not hasattr(doc, 'metadata') or doc.metadata is None:
+                            doc.metadata = {}
+                        doc.metadata["source"] = filename
+                        logger.debug(f"   Tagged document with metadata: {doc.metadata}")
+                    
+                    # Split into chunks (metadata will be inherited by all chunks)
                     doc_splits = self._create_document_chunks(documents)
                     logger.info(f"Created {len(doc_splits)} chunks from {filename}")
                     
@@ -338,12 +523,26 @@ class DocumentProcessor:
                     })
                     continue
             
-            logger.info(f"Total chunks from all files: {len(all_doc_splits)}")
+            logger.info(f"Total NEW chunks from all files: {len(all_doc_splits)}")
             
             # Guard clause: Check if no chunks were produced from any files
             if not all_doc_splits:
                 logger.error(f"No processable chunks were created from any of the {len(file_paths_and_names)} files")
                 raise ValueError(f"Batch processing failed: No valid chunks could be created from any files. Failed files: {failed_files}")
+            
+            # **CRITICAL CHANGE: Load existing chunks from persistent store**
+            logger.info("📦 Loading existing chunks from persistent store...")
+            existing_chunks = self._load_chunk_store(collection_name)
+            
+            # **CRITICAL CHANGE: Combine existing chunks with new chunks**
+            all_session_chunks = existing_chunks + all_doc_splits
+            logger.info(f"💾 Total chunks after batch processing: {len(all_session_chunks)} (existing: {len(existing_chunks)}, new: {len(all_doc_splits)})")
+            
+            # **CRITICAL CHANGE: Save updated chunks to persistent store**
+            logger.info("💾 Saving updated chunks to persistent store...")
+            if not self._save_chunk_store(collection_name, all_session_chunks):
+                logger.error("❌ Failed to save chunks to persistent store")
+                raise RuntimeError("Failed to save chunks to persistent store")
             
             # Log processing summary
             successful_files = len([f for f in file_metadata if f['status'] == 'success'])
@@ -351,14 +550,14 @@ class DocumentProcessor:
             if failed_files:
                 logger.warning(f"Failed to process {len(failed_files)} files: {failed_files}")
             
-            # Step 2: Create/update FAISS index with ALL chunks at once (CRITICAL CUMULATIVE OPERATION)
-            logger.info(f"🔄 BATCH PROCESSING: Creating/updating vector database with {len(all_doc_splits)} total chunks...")
+            # Step 2: Create/update FAISS index with ALL chunks (existing + new)
+            logger.info(f"🔄 BATCH PROCESSING: Creating/updating vector database with {len(all_session_chunks)} total chunks...")
             logger.info(f"   📊 Chunks breakdown by file:")
             for file_meta in file_metadata:
                 if file_meta.get('status') == 'success':
                     logger.info(f"     - {file_meta['filename']}: {file_meta['chunks']} chunks")
             
-            vectorstore = self._create_vector_database(all_doc_splits, collection_name)
+            vectorstore = self._create_vector_database(all_session_chunks, collection_name)
             
             # Step 3: Create retriever
             retriever = vectorstore.as_retriever(
@@ -385,49 +584,83 @@ class DocumentProcessor:
         """
         Rebuild FAISS index for a session with only the remaining documents
         This is used when documents are deleted from a session
+        
+        **CRITICAL FIX**: Now uses persistent chunk store instead of unreliable metadata
         """
         try:
             collection_name = f"session_{session_id}"
-            logger.info(f"Rebuilding FAISS index '{collection_name}' with {len(remaining_documents)} documents")
+            logger.info(f"🔄 REBUILDING INDEX: '{collection_name}' with {len(remaining_documents)} remaining documents")
             
             if len(remaining_documents) == 0:
-                # No documents left, delete the index
+                # No documents left, delete everything
+                logger.info("📭 No documents remaining - cleaning up session")
                 self._delete_faiss_index(collection_name)
-                logger.info(f"Deleted empty FAISS index: {collection_name}")
+                self._delete_chunk_store(collection_name)
+                logger.info(f"✅ Cleaned up empty session: {collection_name}")
                 return None
             
-            # Recreate documents from metadata
-            all_chunks = []
-            for doc_meta in remaining_documents:
-                # We need to reload and rechunk the documents
-                # For now, we'll store the original chunks in metadata if available
-                if 'chunks_data' in doc_meta:
-                    all_chunks.extend(doc_meta['chunks_data'])
+            # **CRITICAL CHANGE: Load all chunks from persistent store**
+            logger.info("📦 Loading all chunks from persistent store...")
+            all_session_chunks = self._load_chunk_store(collection_name)
+            
+            if not all_session_chunks:
+                logger.error(f"❌ No chunks found in persistent store for {collection_name}")
+                logger.error("   This indicates a critical data integrity issue!")
+                return None
+            
+            # **CRITICAL CHANGE: Filter chunks to keep only remaining documents**
+            remaining_filenames = {doc['filename'] for doc in remaining_documents}
+            logger.info(f"🎯 Filtering chunks for remaining documents: {remaining_filenames}")
+            
+            filtered_chunks = []
+            for chunk in all_session_chunks:
+                chunk_source = chunk.metadata.get("source")
+                if chunk_source in remaining_filenames:
+                    filtered_chunks.append(chunk)
                 else:
-                    logger.warning(f"No chunk data available for {doc_meta['filename']}, skipping rebuild")
-                    continue
+                    logger.debug(f"   Removing chunk from deleted document: {chunk_source}")
             
-            if not all_chunks:
-                logger.warning("No valid chunks found for rebuilding index")
+            logger.info(f"📊 Chunk filtering results:")
+            logger.info(f"   Total chunks in store: {len(all_session_chunks)}")
+            logger.info(f"   Chunks after filtering: {len(filtered_chunks)}")
+            logger.info(f"   Chunks removed: {len(all_session_chunks) - len(filtered_chunks)}")
+            
+            if not filtered_chunks:
+                logger.warning("⚠️  No chunks remain after filtering - this shouldn't happen!")
                 return None
             
-            # Delete old index
+            # **CRITICAL CHANGE: Save filtered chunks back to persistent store**
+            logger.info("💾 Saving filtered chunks back to persistent store...")
+            if not self._save_chunk_store(collection_name, filtered_chunks):
+                logger.error("❌ Failed to save filtered chunks to persistent store")
+                return None
+            
+            # Delete old FAISS index
+            logger.info("🗑️  Deleting old FAISS index...")
             self._delete_faiss_index(collection_name)
             
-            # Create new index with remaining chunks
-            vectorstore = self._create_vector_database(all_chunks, collection_name)
+            # **CRITICAL CHANGE: Rebuild FAISS index from filtered chunks**
+            logger.info(f"🔄 Rebuilding FAISS index with {len(filtered_chunks)} filtered chunks...")
+            vectorstore = self._create_vector_database(filtered_chunks, collection_name)
             
             # Create new retriever
             retriever = vectorstore.as_retriever(
                 search_type="similarity",
-                search_kwargs={"k": 6}
+                search_kwargs={"k": 20}  # Increased for reranking pipeline
             )
             
-            logger.info(f"Successfully rebuilt FAISS index '{collection_name}' with {len(all_chunks)} chunks")
+            logger.info(f"✅ Successfully rebuilt session index:")
+            logger.info(f"   Session: {collection_name}")
+            logger.info(f"   Documents: {len(remaining_documents)}")
+            logger.info(f"   Chunks: {len(filtered_chunks)}")
+            logger.info(f"   Persistent store updated: ✅")
+            
             return {
                 'retriever': retriever,
-                'chunks': len(all_chunks),
-                'vectorstore': vectorstore
+                'chunks': len(filtered_chunks),
+                'total_chunks': len(filtered_chunks),  # For consistency with other methods
+                'vectorstore': vectorstore,
+                'chunks_data': filtered_chunks  # For potential future use
             }
             
         except Exception as e:

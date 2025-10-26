@@ -81,17 +81,20 @@ You MUST respond with a valid JSON object containing two top-level keys:
   "tasks": [
     {{
       "tool": "vectorstore_retrieval" | "web_search",
-      "query": "specific sub-query for this tool"
+      "query": "specific sub-query for this tool",
+      "source_document": "filename for vectorstore_retrieval tasks (e.g., 'Resume.v23.pdf') or null for web_search tasks"
     }}
   ],
   "metadata": {{
-    "source_document": "filename if mentioned (e.g., 'Resume.v23.pdf') or null",
+    "source_document": "primary document filename if mentioned (e.g., 'Resume.v23.pdf') or null",
     "mentioned_people": ["array of person names"],
     "mentioned_companies": ["array of company names"],
     "date_range": "temporal reference if mentioned or null"
   }}
 }}
 ```
+
+**IMPORTANT:** For vectorstore_retrieval tasks, always include the `source_document` field in each task to enable precise document filtering during retrieval.
 
 **EXAMPLES:**
 
@@ -102,11 +105,13 @@ Response:
   "tasks": [
     {{
       "tool": "web_search",
-      "query": "current weather today"
+      "query": "current weather today",
+      "source_document": null
     }},
     {{
       "tool": "vectorstore_retrieval", 
-      "query": "summary of the provided document"
+      "query": "summary of the provided document",
+      "source_document": null
     }}
   ],
   "metadata": {{
@@ -125,11 +130,13 @@ Response:
   "tasks": [
     {{
       "tool": "web_search",
-      "query": "current CEO of Apple 2024"
+      "query": "current CEO of Apple 2024",
+      "source_document": null
     }},
     {{
       "tool": "vectorstore_retrieval",
-      "query": "John's leadership experience from Resume.v23.pdf"
+      "query": "John's leadership experience from Resume.v23.pdf",
+      "source_document": "Resume.v23.pdf"
     }}
   ],
   "metadata": {{
@@ -148,7 +155,8 @@ Response:
   "tasks": [
     {{
       "tool": "vectorstore_retrieval",
-      "query": "summarize the main findings in the research paper"
+      "query": "summarize the main findings in the research paper",
+      "source_document": null
     }}
   ],
   "metadata": {{
@@ -167,7 +175,8 @@ Response:
   "tasks": [
     {{
       "tool": "vectorstore_retrieval",
-      "query": "Microsoft AI developments from quarterly_report.xlsx"
+      "query": "Microsoft AI developments from quarterly_report.xlsx",
+      "source_document": "quarterly_report.xlsx"
     }}
   ],
   "metadata": {{
@@ -187,7 +196,8 @@ Response:
   "tasks": [
     {{
       "tool": "vectorstore_retrieval",
-      "query": "list the projects"
+      "query": "list the projects",
+      "source_document": "Resume.v23.pdf"
     }}
   ],
   "metadata": {{
@@ -291,6 +301,10 @@ def analyze_query(question: str, available_documents: Optional[List[str]] = None
                     raise ValueError("Each task must have 'tool' and 'query' fields")
                 if task["tool"] not in ["vectorstore_retrieval", "web_search"]:
                     raise ValueError(f"Invalid tool: {task['tool']}")
+                
+                # Ensure source_document field exists (add default if missing)
+                if "source_document" not in task:
+                    task["source_document"] = None
             
             # Validate metadata structure
             if not isinstance(metadata, dict):
@@ -388,27 +402,27 @@ def _create_fallback_analysis(question: str, available_documents: Optional[List[
         logger.info("Detected hybrid query in fallback - creating multi-tool plan")
         return {
             "tasks": [
-                {"tool": "vectorstore_retrieval", "query": question},
-                {"tool": "web_search", "query": question}
+                {"tool": "vectorstore_retrieval", "query": question, "source_document": source_document},
+                {"tool": "web_search", "query": question, "source_document": None}
             ],
             "metadata": fallback_metadata
         }
     elif has_document_patterns:
         # Document-specific query
         return {
-            "tasks": [{"tool": "vectorstore_retrieval", "query": question}],
+            "tasks": [{"tool": "vectorstore_retrieval", "query": question, "source_document": source_document}],
             "metadata": fallback_metadata
         }
     elif has_web_patterns:
         # Web search query
         return {
-            "tasks": [{"tool": "web_search", "query": question}],
+            "tasks": [{"tool": "web_search", "query": question, "source_document": None}],
             "metadata": fallback_metadata
         }
     
     # Default: try documents first (most queries can benefit from document context)
     return {
-        "tasks": [{"tool": "vectorstore_retrieval", "query": question}],
+        "tasks": [{"tool": "vectorstore_retrieval", "query": question, "source_document": source_document}],
         "metadata": fallback_metadata
     }
 

@@ -12,24 +12,61 @@ The LangGraph workflow includes:
 - Error handling and recovery strategies
 
 This demonstrates practical LangGraph RAG patterns for building robust
-question-answering systems with proper workflow orchestration.
+question-answering systems with advanced state management and caching.
 """
 
+import hashlib
 from langchain_core.documents import Document
-from langgraph.graph import END, StateGraph
-
-from state import GraphState
-from chains.evaluate import evaluate_docs
-from chains.generate_answer import generate_chain
-from chains.query_classifier import classify_query
-from chains.rerank_documents import rerank_documents
-from chains.analyze_documents_batch import analyze_documents_batch
-from chains.query_analysis_router import analyze_query
-from chains.multi_tool_executor import MultiToolExecutor
-from chains.context_assessment import assess_context_sufficiency
-from chains.rewrite_query import generate_progressive_rewrite
+from langgraph.graph import StateGraph, END
+from backend.state import GraphState
+from backend.chains.generate_answer import generate_chain
+from backend.chains.evaluate import evaluate_docs
+from backend.chains.evaluate_batch import evaluate_documents_batch
+from backend.chains.relevance_batch import evaluate_relevance_batch
+from backend.chains.query_classifier import classify_query
+from backend.chains.query_analysis_router import analyze_query
+from backend.chains.multi_tool_executor import MultiToolExecutor
+from backend.chains.rerank_documents import rerank_documents
+from backend.chains.analyze_documents_batch import analyze_documents_batch
+from backend.chains.context_assessment import assess_context_sufficiency
+from backend.chains.rewrite_query import generate_progressive_rewrite
 from langchain_community.tools.tavily_search import TavilySearchResults
-from config import TAVILY_SEARCH_RESULTS
+from backend.config import TAVILY_SEARCH_RESULTS
+
+
+def _create_context_signature(documents, web_search_results, rerank_completed):
+    """
+    Create a hash signature of the current context for cache validation.
+    
+    This helps determine if the validation context has changed since the last
+    relevance evaluation, allowing us to reuse cached scores when appropriate.
+    """
+    context_elements = []
+    
+    # Add document content hashes
+    if documents:
+        for doc in documents:
+            if hasattr(doc, 'page_content'):
+                context_elements.append(doc.page_content[:200])  # First 200 chars for efficiency
+            else:
+                context_elements.append(str(doc)[:200])
+    
+    # Add web search results hashes
+    if web_search_results:
+        for result in web_search_results:
+            if hasattr(result, 'page_content'):
+                context_elements.append(result.page_content[:200])
+            elif isinstance(result, dict) and 'content' in result:
+                context_elements.append(result['content'][:200])
+            else:
+                context_elements.append(str(result)[:200])
+    
+    # Add rerank status
+    context_elements.append(f"rerank:{rerank_completed}")
+    
+    # Create hash of all context elements
+    context_string = "|".join(context_elements)
+    return hashlib.md5(context_string.encode()).hexdigest()
 
 
 class RAGWorkflow:
@@ -88,7 +125,7 @@ class RAGWorkflow:
         
         try:
             # Import here to avoid circular imports
-            from session_manager import session_manager
+            from backend.session_manager import session_manager
             
             # Get session documents
             session_documents = session_manager.get_session_documents(self.current_session_id)
@@ -227,26 +264,45 @@ class RAGWorkflow:
         query_classification = classify_query(question)
         print(f"Query classification: {query_classification}")
 
-        filtered_docs = []
-        document_evaluations = []
+        # **BATCHED DOCUMENT EVALUATION OPTIMIZATION**
+        print(f"🚀 BATCH EVALUATION: Processing {len(documents)} documents in single API call")
+        
+        try:
+            # Single API call for all documents
+            document_evaluations = evaluate_documents_batch(question, documents, query_classification)
+            print(f"✅ Batch evaluation successful for {len(document_evaluations)} documents")
+            
+            # Filter relevant documents based on batch results
+            filtered_docs = []
+            for i, (document, evaluation) in enumerate(zip(documents, document_evaluations)):
+                if evaluation.score.lower() == "yes":
+                    filtered_docs.append(document)
+            
+            print(f"📊 Batch evaluation results: {len(filtered_docs)}/{len(documents)} documents deemed relevant")
+            
+        except Exception as e:
+            print(f"⚠️  Batch evaluation failed: {e}")
+            print("🔄 Falling back to individual document evaluation")
+            
+            # Fallback to individual evaluation
+            filtered_docs = []
+            document_evaluations = []
 
-        for document in documents:
-            response = evaluate_docs.invoke(
-                {
-                    "question": question,
-                    "document": document.page_content,
-                    "query_classification": query_classification,
-                }
-            )
-            document_evaluations.append(response)
+            for document in documents:
+                response = evaluate_docs.invoke(
+                    {
+                        "question": question,
+                        "document": document.page_content,
+                        "query_classification": query_classification,
+                    }
+                )
+                document_evaluations.append(response)
 
-            result = response.score
-            if result.lower() == "yes":
-                filtered_docs.append(document)
+                result = response.score
+                if result.lower() == "yes":
+                    filtered_docs.append(document)
 
-        print(
-            f"Evaluated {len(documents)} documents, {len(filtered_docs)} deemed relevant."
-        )
+            print(f"📊 Individual evaluation results: {len(filtered_docs)}/{len(documents)} documents deemed relevant")
 
         # Determine if online search is needed based on query classification and document relevance
         if query_classification == "DOCUMENT_FIRST":
@@ -372,31 +428,57 @@ class RAGWorkflow:
         solution = generate_chain.invoke({"context": context_for_generation, "question": question})
         print(f"Answer generated: {len(solution)} characters")
         
-        # Generate Quality Metrics for frontend display
+        # Generate Quality Metrics for frontend display with batching optimization
         print("🔍 Generating Quality Metrics...")
         
-        # Document relevance score (answer grounding)
-        document_relevance_score = None
-        if documents:
-            try:
-                from chains.document_relevance import document_relevance
-                document_relevance_score = document_relevance.invoke(
-                    {"documents": documents, "solution": solution}
-                )
-                print(f"   Document grounding: {document_relevance_score.binary_score}")
-            except Exception as e:
-                print(f"   Error generating document relevance score: {e}")
+        # Create context signature for cache validation
+        rerank_completed = state.get("rerank_completed", False)
+        current_context_signature = _create_context_signature(documents, web_search_results, rerank_completed)
         
-        # Question relevance score
-        question_relevance_score = None
+        # **BATCHED RELEVANCE EVALUATION OPTIMIZATION**
+        print("🚀 BATCH RELEVANCE: Evaluating document + question relevance in single API call")
+        
         try:
-            from chains.question_relevance import question_relevance
-            question_relevance_score = question_relevance.invoke(
-                {"question": question, "solution": solution}
-            )
+            # **DEBUG: Log exact documents being sent to batch relevance evaluation**
+            print(f"🔍 DEBUG: evaluate_relevance_batch receiving {len(documents)} documents")
+            for i, doc in enumerate(documents[:3]):  # Show first 3 for debugging
+                preview = doc.page_content[:100] if hasattr(doc, 'page_content') else str(doc)[:100]
+                print(f"   Doc {i+1}: {preview}...")
+            
+            # Single API call for both document and question relevance
+            batch_relevance_result = evaluate_relevance_batch(question, documents, solution)
+            document_relevance_score = batch_relevance_result["document_relevance_score"]
+            question_relevance_score = batch_relevance_result["question_relevance_score"]
+            
+            print("✅ Batch relevance evaluation successful")
+            print(f"   Document grounding: {document_relevance_score.binary_score}")
             print(f"   Question relevance: {question_relevance_score.binary_score}")
+            
         except Exception as e:
-            print(f"   Error generating question relevance score: {e}")
+            print(f"⚠️  Batch relevance evaluation failed: {e}")
+            print("🔄 Falling back to individual relevance evaluations")
+            
+            # Fallback to individual evaluations
+            document_relevance_score = None
+            if documents:
+                try:
+                    from chains.document_relevance import document_relevance
+                    document_relevance_score = document_relevance.invoke(
+                        {"documents": documents, "solution": solution}
+                    )
+                    print(f"   Document grounding: {document_relevance_score.binary_score}")
+                except Exception as e:
+                    print(f"   Error generating document relevance score: {e}")
+            
+            question_relevance_score = None
+            try:
+                from chains.question_relevance import question_relevance
+                question_relevance_score = question_relevance.invoke(
+                    {"question": question, "solution": solution}
+                )
+                print(f"   Question relevance: {question_relevance_score.binary_score}")
+            except Exception as e:
+                print(f"   Error generating question relevance score: {e}")
         
         print("✅ Answer generation and quality metrics completed")
 
@@ -405,8 +487,12 @@ class RAGWorkflow:
             "question": question,
             "solution": solution,
             "generation_attempts": new_attempts,  # Update generation attempts
-            "document_relevance_score": document_relevance_score,  # NEW: Quality metrics
-            "question_relevance_score": question_relevance_score,  # NEW: Quality metrics
+            "document_relevance_score": document_relevance_score,  # Quality metrics
+            "question_relevance_score": question_relevance_score,  # Quality metrics
+            # Cache the relevance scores and context signature for reuse
+            "cached_document_relevance": document_relevance_score,
+            "cached_question_relevance": question_relevance_score,
+            "cache_context_signature": current_context_signature,
         }
 
     def _search_online(self, state: GraphState):
@@ -545,6 +631,12 @@ class RAGWorkflow:
             }
 
         try:
+            # **DEBUG: Log exact documents being sent to batch analysis**
+            print(f"🔍 DEBUG: analyze_documents_batch receiving {len(documents)} documents")
+            for i, doc in enumerate(documents[:3]):  # Show first 3 for debugging
+                preview = doc.page_content[:100] if hasattr(doc, 'page_content') else str(doc)[:100]
+                print(f"   Doc {i+1}: {preview}...")
+            
             # Perform batch analysis
             analysis_results = analyze_documents_batch(question, documents)
 
@@ -703,47 +795,97 @@ class RAGWorkflow:
                     web_content.append(str(result))
             full_context_parts.extend(web_content)
         
-        # Create comprehensive validation context
-        if full_context_parts:
-            full_context = " ".join(full_context_parts)
-            print(f"✅ Complete validation context built: {len(full_context)} characters")
-            print(f"Context sources: {len(reranked_docs)} docs + {len(web_results)} web results")
-            
-            # Perform grounding check against COMPLETE context
-            from chains.document_relevance import document_relevance
-            
-            # Create document-like objects for the validation
-            validation_docs = []
-            if reranked_docs:
-                validation_docs.extend(reranked_docs)
-            if web_results:
-                # Convert web results to document format for validation
-                from langchain_core.documents import Document
-                for result in web_results:
-                    if hasattr(result, 'page_content'):
-                        validation_docs.append(result)
-                    elif isinstance(result, dict) and 'content' in result:
-                        validation_docs.append(Document(page_content=result['content']))
-                    else:
-                        validation_docs.append(Document(page_content=str(result)))
-            
-            doc_relevance_score = document_relevance.invoke(
-                {"documents": validation_docs, "solution": solution}
-            )
-            print(f"Document grounding (complete context): {doc_relevance_score.binary_score}")
-        else:
-            print("⚠️  No context available for validation - assuming grounded")
-            # If no context, assume it's grounded to avoid false positives
-            class MockScore:
-                binary_score = True
-            doc_relevance_score = MockScore()
+        # **CACHING OPTIMIZATION: Check if we can reuse cached relevance scores**
+        rerank_completed = state.get("rerank_completed", False)
+        current_context_signature = _create_context_signature(reranked_docs, web_results, rerank_completed)
+        cached_context_signature = state.get("cache_context_signature")
+        cached_document_relevance = state.get("cached_document_relevance")
+        cached_question_relevance = state.get("cached_question_relevance")
         
-        # Get question relevance score (unchanged)
-        from chains.question_relevance import question_relevance
-        question_relevance_score = question_relevance.invoke(
-            {"question": question, "solution": solution}
+        # Check cache validity conditions
+        cache_valid = (
+            cached_context_signature == current_context_signature and
+            cached_document_relevance is not None and
+            cached_question_relevance is not None
         )
-        print(f"Question relevance: {question_relevance_score.binary_score}")
+        
+        if cache_valid:
+            print("🚀 CACHE HIT: Reusing cached relevance scores (context unchanged)")
+            print(f"   Cached context signature: {cached_context_signature[:16]}...")
+            doc_relevance_score = cached_document_relevance
+            question_relevance_score = cached_question_relevance
+            print(f"   Cached document grounding: {doc_relevance_score.binary_score}")
+            print(f"   Cached question relevance: {question_relevance_score.binary_score}")
+        else:
+            print("💡 CACHE MISS: Context changed, performing fresh relevance evaluation")
+            if cached_context_signature:
+                print(f"   Previous signature: {cached_context_signature[:16]}...")
+                print(f"   Current signature:  {current_context_signature[:16]}...")
+            
+            # Create comprehensive validation context and use batched evaluation
+            if full_context_parts:
+                full_context = " ".join(full_context_parts)
+                print(f"✅ Complete validation context built: {len(full_context)} characters")
+                print(f"Context sources: {len(reranked_docs)} docs + {len(web_results)} web results")
+                
+                # Create document-like objects for the validation
+                validation_docs = []
+                if reranked_docs:
+                    validation_docs.extend(reranked_docs)
+                if web_results:
+                    # Convert web results to document format for validation
+                    from langchain_core.documents import Document
+                    for result in web_results:
+                        if hasattr(result, 'page_content'):
+                            validation_docs.append(result)
+                        elif isinstance(result, dict) and 'content' in result:
+                            validation_docs.append(Document(page_content=result['content']))
+                        else:
+                            validation_docs.append(Document(page_content=str(result)))
+                
+                # **BATCHED VALIDATION EVALUATION**
+                print("🚀 BATCH VALIDATION: Evaluating both relevance scores in single API call")
+                
+                try:
+                    # **DEBUG: Log exact documents being sent to batch validation**
+                    print(f"🔍 DEBUG: batch validation receiving {len(validation_docs)} documents")
+                    for i, doc in enumerate(validation_docs[:3]):  # Show first 3 for debugging
+                        preview = doc.page_content[:100] if hasattr(doc, 'page_content') else str(doc)[:100]
+                        print(f"   Validation Doc {i+1}: {preview}...")
+                    
+                    # Single API call for both validation checks
+                    batch_validation_result = evaluate_relevance_batch(question, validation_docs, solution)
+                    doc_relevance_score = batch_validation_result["document_relevance_score"]
+                    question_relevance_score = batch_validation_result["question_relevance_score"]
+                    
+                    print("✅ Batch validation evaluation successful")
+                    print(f"Document grounding (complete context): {doc_relevance_score.binary_score}")
+                    print(f"Question relevance: {question_relevance_score.binary_score}")
+                    
+                except Exception as e:
+                    print(f"⚠️  Batch validation failed: {e}")
+                    print("🔄 Falling back to individual validation evaluations")
+                    
+                    # Fallback to individual evaluations
+                    from chains.document_relevance import document_relevance
+                    doc_relevance_score = document_relevance.invoke(
+                        {"documents": validation_docs, "solution": solution}
+                    )
+                    print(f"Document grounding (complete context): {doc_relevance_score.binary_score}")
+                    
+                    from chains.question_relevance import question_relevance
+                    question_relevance_score = question_relevance.invoke(
+                        {"question": question, "solution": solution}
+                    )
+                    print(f"Question relevance: {question_relevance_score.binary_score}")
+                    
+            else:
+                print("⚠️  No context available for validation - assuming grounded")
+                # If no context, assume it's grounded to avoid false positives
+                class MockScore:
+                    binary_score = True
+                doc_relevance_score = MockScore()
+                question_relevance_score = MockScore()
         
         # Decision logic with circuit breaker
         if doc_relevance_score and doc_relevance_score.binary_score:
@@ -849,7 +991,7 @@ class RAGWorkflow:
                 "vectorstore_results": vectorstore_results,
                 "web_search_results": web_search_results,
                 "combined_context": combined_context,
-                "documents": vectorstore_results + web_search_results,  # For compatibility
+                # REMOVED: "documents": vectorstore_results + web_search_results - Let reranking set this
                 "online_search": len(web_search_results) > 0,
                 "search_method": "multi_tool"
             }
@@ -873,13 +1015,30 @@ class RAGWorkflow:
         """Assess whether retrieved context is sufficient to answer the question"""
         print("GRAPH STATE: Assess Context")
         
-        # CRITICAL FIX: Use original_question for assessment, not rewritten query
+        # **CRITICAL FIX 1: TOOL-AWARE CONTEXT ASSESSMENT**
+        # Check if the execution plan was for web_search and if it succeeded
+        execution_plan = state.get("execution_plan", [])
+        web_search_results = state.get("web_search_results", [])
+        
+        # Early exit for successful web search
+        is_web_search_plan = any(task.get("tool") == "web_search" for task in execution_plan)
+        web_results_exist = bool(web_search_results)
+        
+        if is_web_search_plan and web_results_exist:
+            print("---CONTEXT ASSESSMENT: SUFFICIENT (Successful Web Search)---")
+            print(f"   Web search plan detected with {len(web_search_results)} results")
+            print("   Skipping document assessment - web search provides sufficient context")
+            return {
+                "context_assessment": "sufficient"
+            }
+        
+        # If not a successful web search, proceed with document assessment
         original_question = state.get("original_question", state["question"])
         current_question = state["question"]  # May be rewritten
         documents = state.get("documents", [])
         rewrite_attempts = state.get("rewrite_attempts", 0)
         
-        print(f"Assessing context sufficiency for ORIGINAL question: '{original_question[:100]}...'")
+        print(f"Assessing document context sufficiency for ORIGINAL question: '{original_question[:100]}...'")
         print(f"Current (possibly rewritten) query: '{current_question[:100]}...'")
         print(f"Number of documents to assess: {len(documents)}")
         print(f"Current rewrite attempts: {rewrite_attempts}")
@@ -900,39 +1059,76 @@ class RAGWorkflow:
         }
     
     def _rewrite_query(self, state: GraphState):
-        """Rewrite the query to improve retrieval results"""
+        """Rewrite the query to improve retrieval results while preserving tool and intent"""
         print("GRAPH STATE: Rewrite Query")
         
-        original_question = state["question"]
+        # **CRITICAL FIX 2: PRESERVE TOOL AND INTENT**
+        # Use ORIGINAL question for rewriting to preserve full intent
+        original_question = state.get("original_question", state["question"])
+        current_question = state["question"]  # May already be rewritten
         failed_documents = state.get("documents", [])
         current_attempts = state.get("rewrite_attempts", 0)
+        original_execution_plan = state.get("execution_plan", [])
         
         # Increment rewrite attempts
         new_attempts = current_attempts + 1
         
-        print(f"Rewriting query (attempt #{new_attempts}): '{original_question[:100]}...'")
-        print(f"Analyzing {len(failed_documents)} failed documents for rewrite clues")
+        print(f"Rewriting query (attempt #{new_attempts})")
+        print(f"   ORIGINAL question (preserving full intent): '{original_question[:100]}...'")
+        print(f"   Current question: '{current_question[:100]}...'")
+        print(f"   Analyzing {len(failed_documents)} failed documents for rewrite clues")
         
-        # Generate rewritten query using progressive strategy
+        # **PRESERVE ORIGINAL TOOLS FROM EXECUTION PLAN**
+        original_tools = [task.get("tool") for task in original_execution_plan if task.get("tool")]
+        print(f"   Original tools used: {original_tools}")
+        
+        # Generate rewritten query using ORIGINAL question to preserve full intent
         rewritten_query = generate_progressive_rewrite(
-            original_question, 
+            original_question,  # Use original question, not current rewritten one
             failed_documents, 
             new_attempts
         )
         
-        print(f"Original query: '{original_question}'")
-        print(f"Rewritten query: '{rewritten_query}'")
+        print(f"   Rewritten query: '{rewritten_query}'")
         
-        # Update the question in state and increment counter
+        # **CREATE NEW EXECUTION PLAN WITH SAME TOOLS**
+        if original_tools:
+            # Preserve the original tool strategy
+            retry_tool = original_tools[0]  # Use the primary tool from original plan
+            print(f"   Preserving original tool: {retry_tool}")
+            
+            new_execution_plan = [{
+                "tool": retry_tool,
+                "query": rewritten_query
+            }]
+            
+            # If original plan had multiple tools, preserve them
+            if len(original_tools) > 1:
+                for tool in original_tools[1:]:
+                    new_execution_plan.append({
+                        "tool": tool,
+                        "query": rewritten_query
+                    })
+        else:
+            # Fallback to vectorstore if no original plan found
+            print("   No original tools found, defaulting to vectorstore_retrieval")
+            new_execution_plan = [{
+                "tool": "vectorstore_retrieval",
+                "query": rewritten_query
+            }]
+        
+        print(f"   New execution plan: {new_execution_plan}")
+        
+        # Update state with preserved tool strategy
         return {
             "question": rewritten_query,  # Replace with rewritten query
-            "original_question": state.get("original_question", original_question),  # Preserve original for reference
+            "original_question": original_question,  # Preserve original for reference
             "rewrite_attempts": new_attempts,
+            "execution_plan": new_execution_plan,  # **NEW: Preserve tool strategy**
             "documents": [],  # Clear previous documents
             "vectorstore_results": [],  # Clear previous results
             "web_search_results": [],  # Clear previous results
             "combined_context": "",  # Clear previous context
-            "execution_plan": [],  # Will be regenerated
             "context_assessment": "insufficient"  # Reset assessment
         }
     

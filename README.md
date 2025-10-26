@@ -53,23 +53,42 @@ This project was built with a relentless focus on performance, accuracy, and arc
 ## 7. Project Structure
 
 ```
-adaptive-rag-agent/
-├── frontend/             # React TypeScript Frontend
+AdvLang/
+├── frontend/                    # React TypeScript Frontend
 │   ├── src/
-│   │   ├── components/   # UI Components (Upload, Chat, etc.)
+│   │   ├── components/          # UI Components (Upload, Chat, etc.)
 │   │   └── App.tsx
 │   └── package.json
-├── backend/              # FastAPI Python Backend
-│   ├── chains/           # LangChain/LangGraph components
+├── backend/                     # FastAPI Python Backend
+│   ├── chains/                  # LangChain/LangGraph components
 │   │   ├── query_analysis_router.py
+│   │   ├── multi_tool_executor.py
 │   │   ├── rerank_documents.py
-│   │   └── quality_gates.py
-│   ├── utils/
-│   │   └── document_processor.py
-│   ├── rag_workflow.py   # Main LangGraph definition
-│   ├── api.py            # FastAPI endpoints
-│   └── main.py           # Application entry point
-└── .env                  # API keys and configuration
+│   │   ├── context_assessment.py
+│   │   ├── rewrite_query.py
+│   │   ├── generate_answer.py
+│   │   ├── evaluate_batch.py
+│   │   ├── relevance_batch.py
+│   │   └── analyze_documents_batch.py
+│   ├── api.py                   # FastAPI endpoints
+│   ├── rag_workflow.py          # Main LangGraph workflow definition
+│   ├── document_processor.py    # Document chunking & FAISS indexing
+│   ├── document_loader.py       # Multi-format document loading
+│   ├── session_manager.py       # Session & conversation management
+│   ├── state.py                 # LangGraph state definition
+│   ├── config.py                # Configuration & API keys
+│   └── utils.py                 # Utility functions
+├── tests/                       # Test suite
+│   ├── test_batching_optimizations.py
+│   ├── test_relevance_caching.py
+│   ├── test_query_rewriting_loop.py
+│   ├── test_metadata_extraction.py
+│   └── ... (other test files)
+├── faiss_indexes/               # Persistent FAISS vector stores
+├── chunk_stores/                # Persistent document chunk storage
+├── run_api.py                   # API startup script
+├── requirements.txt             # Python dependencies
+└── .env                         # API keys and configuration
 ```
 
 ## 8. How to Run the App
@@ -87,24 +106,27 @@ cd adaptive-rag-agent
 
 ### Step 2: Backend Setup
 ```bash
-cd backend
+# Create and activate virtual environment
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
 ### Step 3: Frontend Setup
 ```bash
-cd ../frontend
+cd frontend
 npm install
 ```
 
 ### Step 4: Run the Application
 ```bash
-# Terminal 1: Start the Backend Server (from backend folder)
-uvicorn main:app --reload
+# Terminal 1: Start the Backend Server (from project root)
+python run_api.py
 
 # Terminal 2: Start the Frontend Dev Server (from frontend folder)
+cd frontend
 npm run dev
 ```
 Access the application at http://localhost:5173 (or your Vite port).

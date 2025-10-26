@@ -19,10 +19,10 @@ from datetime import datetime
 # import uuid  # Currently unused
 
 # Local imports
-from document_loader import MultiModalDocumentLoader
-from document_processor import DocumentProcessor
-from rag_workflow import RAGWorkflow
-from session_manager import session_manager, ConversationExchange
+from backend.document_loader import MultiModalDocumentLoader
+from backend.document_processor import DocumentProcessor
+from backend.rag_workflow import RAGWorkflow
+from backend.session_manager import session_manager, ConversationExchange
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

@@ -4,7 +4,7 @@ Utility functions for the Advanced RAG application
 import shutil
 import os
 import streamlit as st
-from config import CHROMA_PERSIST_DIR
+from backend.config import CHROMA_PERSIST_DIR
 
 
 def clear_chroma_db():
