@@ -20,15 +20,14 @@ from langchain_core.documents import Document
 from langgraph.graph import StateGraph, END
 from backend.state import GraphState
 from backend.chains.generate_answer import generate_chain
-from backend.chains.evaluate import evaluate_docs
+from backend.chains.evaluate_groq import evaluate_documents as evaluate_docs  # Groq-optimized
 from backend.chains.evaluate_batch import evaluate_documents_batch
 from backend.chains.relevance_batch import evaluate_relevance_batch
 from backend.chains.query_classifier import classify_query
 from backend.chains.query_analysis_router import analyze_query
 from backend.chains.multi_tool_executor import MultiToolExecutor
 from backend.chains.rerank_documents import rerank_documents
-from backend.chains.analyze_documents_batch import analyze_documents_batch
-from backend.chains.context_assessment import assess_context_sufficiency
+from backend.chains.context_assessment_groq import assess_context_sufficiency  # Groq-optimized
 from backend.chains.rewrite_query import generate_progressive_rewrite
 from langchain_community.tools.tavily_search import TavilySearchResults
 from backend.config import TAVILY_SEARCH_RESULTS
@@ -462,8 +461,8 @@ class RAGWorkflow:
             document_relevance_score = None
             if documents:
                 try:
-                    from chains.document_relevance import document_relevance
-                    document_relevance_score = document_relevance.invoke(
+                    from chains.document_relevance_groq import check_document_relevance  # Groq-optimized
+                    document_relevance_score = check_document_relevance.invoke(
                         {"documents": documents, "solution": solution}
                     )
                     print(f"   Document grounding: {document_relevance_score.binary_score}")
@@ -631,14 +630,69 @@ class RAGWorkflow:
             }
 
         try:
-            # **DEBUG: Log exact documents being sent to batch analysis**
-            print(f"🔍 DEBUG: analyze_documents_batch receiving {len(documents)} documents")
+            # **DEBUG: Log exact documents being sent to Groq evaluation**
+            print(f"🔍 DEBUG: Groq evaluate_documents receiving {len(documents)} documents")
             for i, doc in enumerate(documents[:3]):  # Show first 3 for debugging
                 preview = doc.page_content[:100] if hasattr(doc, 'page_content') else str(doc)[:100]
                 print(f"   Doc {i+1}: {preview}...")
             
-            # Perform batch analysis
-            analysis_results = analyze_documents_batch(question, documents)
+            # Perform Groq-optimized evaluation for each document
+            print("="*80)
+            print("📊 DOCUMENT EVALUATION - TRACKING MODEL USAGE")
+            print("="*80)
+            
+            analysis_results = []
+            groq_count = 0
+            gemini_count = 0
+            error_count = 0
+            
+            for i, doc in enumerate(documents):
+                try:
+                    print(f"\n🔍 Evaluating Document {i+1}/{len(documents)}...")
+                    
+                    # Use Groq-optimized evaluate_documents
+                    eval_result = evaluate_docs(
+                        question=question,
+                        document=doc.page_content if hasattr(doc, 'page_content') else str(doc),
+                        query_classification="document-specific"
+                    )
+                    
+                    # Track which model was used (check the logs from evaluate_groq.py)
+                    # The evaluate_groq.py logs will show "🚀 Using Groq" or "🔄 Using Gemini"
+                    
+                    analysis_results.append({
+                        "doc_id": i,
+                        "is_relevant": eval_result.score,
+                        "relevance_score": eval_result.relevance_score,
+                        "analysis": {
+                            "coverage": eval_result.coverage_assessment,
+                            "missing_info": eval_result.missing_information
+                        }
+                    })
+                    
+                    print(f"   ✅ Doc {i+1} evaluated: {eval_result.score} (relevance: {eval_result.relevance_score})")
+                    
+                except Exception as e:
+                    error_count += 1
+                    print(f"   ❌ Groq evaluation failed for doc {i}: {e}")
+                    # Fallback for this document
+                    analysis_results.append({
+                        "doc_id": i,
+                        "is_relevant": "YES",
+                        "relevance_score": 50,
+                        "analysis": {
+                            "coverage": "Unable to evaluate",
+                            "missing_info": "Evaluation failed"
+                        }
+                    })
+            
+            print("\n" + "="*80)
+            print("📊 DOCUMENT EVALUATION SUMMARY")
+            print("="*80)
+            print(f"Total documents evaluated: {len(documents)}")
+            print(f"Successful evaluations: {len(analysis_results) - error_count}")
+            print(f"Failed evaluations: {error_count}")
+            print("="*80)
 
             print(f"Batch analysis completed: {len(analysis_results)} analyses")
 
@@ -867,8 +921,8 @@ class RAGWorkflow:
                     print("🔄 Falling back to individual validation evaluations")
                     
                     # Fallback to individual evaluations
-                    from chains.document_relevance import document_relevance
-                    doc_relevance_score = document_relevance.invoke(
+                    from chains.document_relevance_groq import check_document_relevance  # Groq-optimized
+                    doc_relevance_score = check_document_relevance.invoke(
                         {"documents": validation_docs, "solution": solution}
                     )
                     print(f"Document grounding (complete context): {doc_relevance_score.binary_score}")
@@ -1012,50 +1066,88 @@ class RAGWorkflow:
             }
     
     def _assess_context(self, state: GraphState):
-        """Assess whether retrieved context is sufficient to answer the question"""
+        """
+        Assess whether retrieved context is sufficient to answer the question.
+        
+        CRITICAL: This function must differentiate between:
+        - Web-search-only plans (can skip LLM check if successful)
+        - Document-only plans (must run LLM Gap Analysis)
+        - Hybrid plans (must run LLM Gap Analysis on documents)
+        """
         print("GRAPH STATE: Assess Context")
         
-        # **CRITICAL FIX 1: TOOL-AWARE CONTEXT ASSESSMENT**
-        # Check if the execution plan was for web_search and if it succeeded
+        # **STEP 1: ANALYZE EXECUTION PLAN TYPE**
         execution_plan = state.get("execution_plan", [])
         web_search_results = state.get("web_search_results", [])
+        documents = state.get("documents", [])
+        original_question = state.get("original_question", state["question"])
         
-        # Early exit for successful web search
-        is_web_search_plan = any(task.get("tool") == "web_search" for task in execution_plan)
+        # Determine plan composition
+        has_web_search = any(task.get("tool") == "web_search" for task in execution_plan)
+        has_doc_search = any(task.get("tool") == "vectorstore_retrieval" for task in execution_plan)
+        
         web_results_exist = bool(web_search_results)
+        docs_exist = bool(documents)
         
-        if is_web_search_plan and web_results_exist:
-            print("---CONTEXT ASSESSMENT: SUFFICIENT (Successful Web Search)---")
-            print(f"   Web search plan detected with {len(web_search_results)} results")
-            print("   Skipping document assessment - web search provides sufficient context")
+        print("=== PLAN TYPE ANALYSIS ===")
+        print(f"   Plan includes web_search: {has_web_search}")
+        print(f"   Plan includes vectorstore_retrieval: {has_doc_search}")
+        print(f"   Web results exist: {web_results_exist} ({len(web_search_results)} results)")
+        print(f"   Documents exist: {docs_exist} ({len(documents)} docs)")
+        
+        # **CONDITION 1: Safe early exit ONLY for WEB-SEARCH-ONLY queries**
+        if has_web_search and not has_doc_search and web_results_exist:
+            print("---CONTEXT ASSESSMENT: SUFFICIENT (Successful Web-Search-Only Plan)---")
+            print("   ✅ Pure web search query with results - skipping LLM assessment")
             return {
                 "context_assessment": "sufficient"
             }
         
-        # If not a successful web search, proceed with document assessment
-        original_question = state.get("original_question", state["question"])
-        current_question = state["question"]  # May be rewritten
-        documents = state.get("documents", [])
-        rewrite_attempts = state.get("rewrite_attempts", 0)
+        # **CONDITION 2: Immediate failure if docs were required but not found**
+        if has_doc_search and not docs_exist:
+            print("---CONTEXT ASSESSMENT: INSUFFICIENT (Document search required but no docs retrieved)---")
+            print("   ❌ Plan required documents but none were retrieved/reranked")
+            return {
+                "context_assessment": "insufficient"
+            }
         
-        print(f"Assessing document context sufficiency for ORIGINAL question: '{original_question[:100]}...'")
-        print(f"Current (possibly rewritten) query: '{current_question[:100]}...'")
-        print(f"Number of documents to assess: {len(documents)}")
-        print(f"Current rewrite attempts: {rewrite_attempts}")
+        # **CONDITION 3: MUST run LLM Gap Analysis for DOCUMENT-ONLY or HYBRID queries**
+        if has_doc_search:
+            plan_type = "HYBRID" if has_web_search else "DOCUMENT-ONLY"
+            print(f"---CONTEXT ASSESSMENT: Performing LLM Gap Analysis for {plan_type} plan---")
+            print(f"   📊 Analyzing {len(documents)} documents against original question")
+            print("   ⚠️  Note: Even if web search succeeded, we MUST validate document quality for hybrid queries")
+            
+            # Perform LLM-based Gap Analysis on documents
+            try:
+                assessment_result = assess_context_sufficiency(original_question, documents)
+                
+                print(f"✅ LLM GAP ANALYSIS COMPLETE: '{assessment_result}'")
+                
+                if assessment_result == "sufficient":
+                    print("   ✅ Documents provide sufficient context for the question")
+                else:
+                    print("   ❌ Documents are insufficient - query rewrite may be needed")
+                
+                return {
+                    "context_assessment": assessment_result
+                }
+                
+            except Exception as e:
+                print("---CONTEXT ASSESSMENT ERROR: LLM Gap Analysis failed---")
+                print(f"   Error: {e}")
+                print("   ⚠️  Defaulting to 'insufficient' for safety")
+                return {
+                    "context_assessment": "insufficient",
+                    "error": str(e)
+                }
         
-        # CRITICAL: Perform context assessment against ORIGINAL question
-        assessment_result = assess_context_sufficiency(original_question, documents)
-        
-        print(f"✅ CONTEXT ASSESSMENT COMPLETE: '{assessment_result}'")
-        print("   This result will be stored in state['context_assessment'] for routing")
-        
-        # CRITICAL FIX: Return only the fields that need to be updated
-        # LangGraph will automatically merge this with the existing state
-        # Returning too many fields can cause state merging issues
-        
-        print(f"   Returning state update with context_assessment='{assessment_result}'")
+        # **FALLBACK: Unhandled case (should not reach here with proper plan analysis)**
+        print("---CONTEXT ASSESSMENT WARNING: Unhandled plan type---")
+        print("   ⚠️  No web search or document search detected in plan")
+        print("   Defaulting to 'insufficient' for safety")
         return {
-            "context_assessment": assessment_result  # Only return the field that needs updating
+            "context_assessment": "insufficient"
         }
     
     def _rewrite_query(self, state: GraphState):
@@ -1078,10 +1170,6 @@ class RAGWorkflow:
         print(f"   Current question: '{current_question[:100]}...'")
         print(f"   Analyzing {len(failed_documents)} failed documents for rewrite clues")
         
-        # **PRESERVE ORIGINAL TOOLS FROM EXECUTION PLAN**
-        original_tools = [task.get("tool") for task in original_execution_plan if task.get("tool")]
-        print(f"   Original tools used: {original_tools}")
-        
         # Generate rewritten query using ORIGINAL question to preserve full intent
         rewritten_query = generate_progressive_rewrite(
             original_question,  # Use original question, not current rewritten one
@@ -1091,27 +1179,38 @@ class RAGWorkflow:
         
         print(f"   Rewritten query: '{rewritten_query}'")
         
-        # **CREATE NEW EXECUTION PLAN WITH SAME TOOLS**
-        if original_tools:
-            # Preserve the original tool strategy
-            retry_tool = original_tools[0]  # Use the primary tool from original plan
-            print(f"   Preserving original tool: {retry_tool}")
+        # **CRITICAL FIX: PRESERVE FULL PLAN STRUCTURE AND METADATA**
+        # Reconstruct execution plan while preserving tool types, order, and metadata
+        if original_execution_plan:
+            print(f"   Reconstructing execution plan from {len(original_execution_plan)} original tasks")
+            print("   ⚠️  CRITICAL: Preserving tool structure and source_document metadata")
             
-            new_execution_plan = [{
-                "tool": retry_tool,
-                "query": rewritten_query
-            }]
+            new_execution_plan = []
             
-            # If original plan had multiple tools, preserve them
-            if len(original_tools) > 1:
-                for tool in original_tools[1:]:
-                    new_execution_plan.append({
-                        "tool": tool,
-                        "query": rewritten_query
-                    })
+            for i, original_task in enumerate(original_execution_plan):
+                # Create new task preserving the original tool type
+                new_task = {
+                    "tool": original_task.get("tool"),
+                    "query": rewritten_query  # Use rewritten query for all tasks
+                }
+                
+                # **CRITICAL: Preserve source_document metadata for vectorstore tasks**
+                if original_task.get("tool") == "vectorstore_retrieval":
+                    if "source_document" in original_task:
+                        new_task["source_document"] = original_task["source_document"]
+                        print(f"   ✅ Task {i+1}: {new_task['tool']} with source_document='{new_task['source_document']}'")
+                    else:
+                        print(f"   📄 Task {i+1}: {new_task['tool']} (no source filter)")
+                else:
+                    print(f"   🌐 Task {i+1}: {new_task['tool']}")
+                
+                new_execution_plan.append(new_task)
+            
+            print(f"   ✅ Reconstructed plan with {len(new_execution_plan)} tasks (structure preserved)")
+            
         else:
             # Fallback to vectorstore if no original plan found
-            print("   No original tools found, defaulting to vectorstore_retrieval")
+            print("   ⚠️  No original execution plan found, defaulting to vectorstore_retrieval")
             new_execution_plan = [{
                 "tool": "vectorstore_retrieval",
                 "query": rewritten_query

@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv()
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
 # UI Configuration
 PAGE_TITLE = "Advanced RAG"
@@ -27,6 +27,7 @@ LLM_TEMPERATURE = 0
 TAVILY_SEARCH_RESULTS = 2
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Supported File Types
 SUPPORTED_EXTENSIONS = [

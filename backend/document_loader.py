@@ -11,6 +11,7 @@ import logging
 
 from langchain_core.documents import Document
 from backend.multimodal_loader import MultiFormatDocumentLoader as BaseMultiFormatLoader
+from backend.metadata_extractor import MetadataExtractor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -20,9 +21,23 @@ logger = logging.getLogger(__name__)
 class MultiModalDocumentLoader:
     """Multi-format document loader for API usage"""
 
-    def __init__(self):
-        """Initialize with the base multi-format loader"""
+    def __init__(self, enable_metadata_extraction: bool = True):
+        """
+        Initialize with the base multi-format loader and metadata extractor
+        
+        Args:
+            enable_metadata_extraction: Whether to enable hybrid metadata extraction
+        """
         self.base_loader = BaseMultiFormatLoader()
+        self.enable_metadata_extraction = enable_metadata_extraction
+        
+        # Initialize metadata extractor if enabled
+        if self.enable_metadata_extraction:
+            self.metadata_extractor = MetadataExtractor(use_llm=True, cache_enabled=True)
+            logger.info("✅ Metadata extraction enabled for document loading")
+        else:
+            self.metadata_extractor = None
+            logger.info("⚠️ Metadata extraction disabled")
 
     def load_document(self, file_path: str) -> List[Document]:
         """Load a document from file path using the multi-format loader"""
@@ -73,6 +88,12 @@ class MultiModalDocumentLoader:
                     }
                 )
 
+            # CRITICAL: Extract metadata using hybrid extraction layer
+            if self.enable_metadata_extraction and self.metadata_extractor:
+                logger.info(f"🔍 Extracting metadata from {filename}...")
+                documents = self.metadata_extractor.extract_metadata(documents)
+                logger.info(f"✅ Metadata extraction complete for {filename}")
+
             logger.info(
                 f"Successfully processed {filename}: {len(documents)} chunks extracted"
             )
@@ -90,19 +111,20 @@ class MultiModalDocumentLoader:
 
     def load_multiple_files(self, file_data_list: List[tuple]) -> List[Document]:
         """
-        Loads multiple documents from file content
+        Loads multiple documents from file content with optimized batch metadata extraction
 
         Args:
             file_data_list: List of tuples (file_content_bytes, filename)
 
         Returns:
-            List[Document]: Combined document chunks from all files
+            List[Document]: Combined document chunks from all files with enriched metadata
         """
         all_documents = []
         failed_files = []
 
         for file_content, filename in file_data_list:
             try:
+                # Load document without metadata extraction (will do batch extraction later)
                 documents = self.load_file_content(file_content, filename)
                 all_documents.extend(documents)
                 logger.info(f"Successfully loaded {filename}")
@@ -112,6 +134,17 @@ class MultiModalDocumentLoader:
 
         if failed_files:
             logger.warning(f"Failed to load {len(failed_files)} files: {failed_files}")
+
+        # OPTIMIZATION: Perform batch metadata extraction on all documents at once
+        # This is more efficient than extracting metadata for each file individually
+        if self.enable_metadata_extraction and self.metadata_extractor and all_documents:
+            logger.info(f"🔍 Performing batch metadata extraction on {len(all_documents)} document chunks...")
+            # Use parallel extraction for better performance on multiple documents
+            if len(all_documents) > 3:
+                all_documents = self.metadata_extractor.extract_metadata_parallel(all_documents, max_workers=4)
+            else:
+                all_documents = self.metadata_extractor.extract_metadata(all_documents)
+            logger.info("✅ Batch metadata extraction complete")
 
         logger.info(
             f"Total: {len(all_documents)} document chunks from {len(file_data_list) - len(failed_files)} successful uploads"
