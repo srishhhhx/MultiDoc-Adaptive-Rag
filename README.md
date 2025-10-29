@@ -18,7 +18,7 @@ This agent was engineered for production-grade performance and reliability, achi
 | **Perceived Latency (TTFT)** | **< 2 seconds**  | Streaming implemented for near-instant response start. |
 | **Total Latency (P95 Document-Only)** | **< 10 seconds**  | Hybrid LLM & parallel execution drastically cut processing time. |
 | **Total Latency (P95 Hybrid Query)** | **< 15 seconds** | Parallel tool execution minimizes web search overhead. |
-| **Factual Accuracy** | **> 95%** | Validated via human evaluation & automated checks. |
+| **Factual Accuracy** | **> 95%** | Validated via automated checks. |
 | **Hallucination Rate** | **< 3%** | Robust quality gates minimize ungrounded answers. |
 | **Self-Correction Success Rate** | **> 75%** | Agent successfully recovers from most initial retrieval failures. |
 | **End-to-End Success Rate** | **> 99%**  | Handles API errors gracefully via fallback mechanisms. |
