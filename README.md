@@ -57,7 +57,7 @@ This agent was engineered for production-grade performance and reliability, achi
 
 ## 5. Architecture Diagram
 
-![Architecture](Rag frontend/AdvLang/assets/Adp-rag.png)
+![Architecture](./Rag frontend/AdvLang/assets/Adp-rag.png)
 
 
 ## 6. Tech Stack
