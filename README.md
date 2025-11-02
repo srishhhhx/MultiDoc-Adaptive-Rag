@@ -16,8 +16,8 @@ This agent was engineered for production-grade performance and reliability, achi
 | Metric | Target Value| Notes |
 |---|---|---|
 | **Perceived Latency (TTFT)** | **< 2 seconds**  | Streaming implemented for near-instant response start. |
-| **Total Latency (P95 Document-Only)** | **< 10 seconds**  | Hybrid LLM & parallel execution drastically cut processing time. |
-| **Total Latency (P95 Hybrid Query)** | **< 15 seconds** | Parallel tool execution minimizes web search overhead. |
+| **Total Latency (P95 Document-Only)** | **< 15 seconds**  | Hybrid LLM & parallel execution drastically cut processing time. |
+| **Total Latency (P95 Hybrid Query)** | **< 25 seconds** | Parallel tool execution minimizes web search overhead. |
 | **Factual Accuracy** | **> 95%** | Validated via automated checks. |
 | **Hallucination Rate** | **< 3%** | Robust quality gates minimize ungrounded answers. |
 | **Self-Correction Success Rate** | **> 75%** | Agent successfully recovers from most initial retrieval failures. |
@@ -57,7 +57,7 @@ This agent was engineered for production-grade performance and reliability, achi
 
 ## 5. Architecture Diagram
 
-**(Placeholder - Insert link to your Mermaid or other diagram image)**
+![Architecture](Rag frontend/AdvLang/assets/Adp-rag.png)
 
 
 ## 6. Tech Stack
