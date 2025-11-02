@@ -1,16 +1,17 @@
 # Advanced Multi-Document Adaptive RAG Agent
 
 ## Table of Contents
-- [Summary](#summary)
-- [Demo Video](#demo-video)
-- [Performance & Architecture Highlights](#performance--architecture-highlights)
-- [Tech Stack](#tech-stack)
-- [Requirements](#requirements)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Challenges I Faced](#challenges-i-faced)
-- [Future Improvements](#future-improvements)
-- [Contributing](#contributing)
+- [Summary](#1-introduction)
+- [Demo Video](#2-demo-video)
+- [Performance & Architecture Highlights](#3-performance--architecture-highlights)
+- [Features](#4-features)
+- [Architecture Diagram](#5-architecture-diagram)
+- [Tech Stack](#6-tech-stack)
+- [Project Structure](#7-project-structure)
+- [Installation](#8-how-to-run-the-app)
+- [Challenges I Faced](#9-challenges-faced--solutions)
+- [Future Improvements](#10-future-improvements)
+
 
 ## 1. Introduction
 
