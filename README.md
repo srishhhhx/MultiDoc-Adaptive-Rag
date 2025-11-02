@@ -1,5 +1,17 @@
 # Advanced Multi-Document Adaptive RAG Agent
 
+## Table of Contents
+- [Summary](#summary)
+- [Demo Video](#demo-video)
+- [Performance & Architecture Highlights](#performance--architecture-highlights)
+- [Tech Stack](#tech-stack)
+- [Requirements](#requirements)
+- [Project Structure](#project-structure)
+- [Installation](#installation)
+- [Challenges I Faced](#challenges-i-faced)
+- [Future Improvements](#future-improvements)
+- [Contributing](#contributing)
+
 ## 1. Introduction
 
 The Advanced Multi-Document Adaptive RAG Agent is a state-of-the-art AI reasoning system designed for complex question answering across diverse information sources. It goes far beyond standard chatbots, offering a full-stack application (React.js, FastAPI) powered by a sophisticated, self-correcting RAG pipeline orchestrated with **LangGraph**. This agent intelligently deconstructs user queries, forms dynamic execution plans, utilizes multiple tools (document retrieval, web search), and synthesizes information from various documents and the web to deliver accurate, fully-grounded, and insightful answers in real-time. It represents a significant leap in RAG capabilities, emphasizing reliability, efficiency, and adaptability.
