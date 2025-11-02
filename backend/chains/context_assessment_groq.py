@@ -1,12 +1,15 @@
 """
 Enhanced Gap Analysis Context Assessment Chain with Groq Integration
 
-This module implements context assessment using Groq's fast inference API
-with llama3-8b-instruct for rapid evaluation tasks. Falls back to Gemini
-if Groq fails.
+This module implements context assessment using Groq's llama-3.3-70b-versatile
+model for reliable Gap Analysis on complex multi-part queries. Falls back to 
+Gemini if Groq fails.
+
+CRITICAL: Upgraded from 8B to 70B model to fix false negative bug where perfect
+context was incorrectly flagged as insufficient, triggering unnecessary rewrite loops.
 
 Key improvements:
-- 3-5x faster inference with Groq
+- Reliable Gap Analysis with 70B reasoning power
 - Automatic fallback to Gemini
 - Comprehensive latency tracking
 - Structured JSON output parsing
@@ -41,81 +44,69 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 
-# Enhanced Gap Analysis Prompt for Context Assessment
-CONTEXT_ASSESSMENT_PROMPT = """You are an expert document analyst performing a structured Gap Analysis to determine context sufficiency. Your task is to systematically evaluate whether the retrieved documents can adequately answer the user's question.
+# Enhanced Tool-Aware Gap Analysis Prompt for Context Assessment
+CONTEXT_ASSESSMENT_PROMPT = """You are a "Gap Analysis" expert for an advanced multi-tool RAG agent. Your critical job is to determine if the provided context is sufficient to answer the user's *entire* question.
 
-ANALYSIS FRAMEWORK:
+You will be given the user's original question and the context retrieved from TWO different tools:
+1. **Document Retriever** (local files/vectorstore)
+2. **Web Search** (real-time internet search)
 
-1. QUESTION DECOMPOSITION:
-   - Break down the user's question into key components or sub-questions
-   - Identify what specific information types are needed (facts, procedures, examples, etc.)
-   - Note any implicit requirements or context needed for a complete answer
+### Your Task
+1. **Deconstruct the Query:** Break down the `<original_question>` into all its individual sub-questions or required pieces of information.
+2. **Analyze Combined Context:** Review *both* the `<document_context>` and the `<web_context>` to see if they *together* provide enough information to answer *all* parts of the user's query.
+3. **Identify Gaps:** Explicitly state which parts of the query *cannot* be answered by the combined context.
+4. **Make a Decision:** Based on your gap analysis, decide if the overall context is "sufficient" or "insufficient".
+   - **sufficient**: ALL parts of the query are adequately covered by the combined context (documents + web results)
+   - **insufficient**: *Any* significant part of the query is missing or poorly covered
 
-2. CONTENT COVERAGE ANALYSIS:
-   - For each question component, assess what percentage is covered by the documents
-   - Identify which documents contain relevant information for each component
-   - Note the quality and specificity of the information found
+### CRITICAL INSTRUCTION
+You MUST analyze the COMBINED context from BOTH sources. Do NOT assess documents in isolation.
+- If documents cover some components and web results cover others, that is SUFFICIENT
+- Only mark as "insufficient" if the combined context has critical gaps
 
-3. GAP IDENTIFICATION:
-   - List any critical information gaps that would prevent a complete answer
-   - Distinguish between minor gaps (can be reasonably inferred) vs major gaps (require additional sources)
-   - Consider whether partial information is sufficient for a useful response
-
-4. SUFFICIENCY DECISION CRITERIA:
-   - SUFFICIENT: Documents cover ≥70% of question components with adequate detail, OR provide enough context for a meaningful partial answer
-   - INSUFFICIENT: Documents cover <50% of question components, OR missing critical foundational information that cannot be reasonably inferred
-
-IMPORTANT GUIDELINES:
-- Favor "sufficient" when documents provide substantial relevant information, even if not 100% complete
-- Consider that users often benefit from partial but accurate answers rather than no answer
-- Only mark as "insufficient" when the gap is so significant that any answer would be misleading or unhelpful
-- For multi-part questions, assess overall utility rather than requiring every sub-question to be fully answered
-
-USER QUESTION:
-{original_question}
-
-CONTEXT DOCUMENTS:
-{documents}
-
-STRUCTURED ANALYSIS:
-
-1. Question Components:
-[List the key components/sub-questions]
-
-2. Coverage Assessment:
-[For each component, note coverage level and source documents]
-
-3. Gap Analysis:
-[Identify any significant gaps and their impact]
-
-4. Final Decision:
-Based on the analysis above, provide your assessment as a JSON object:
-
+### JSON Output Format
+You MUST provide your response *only* in the following JSON format:
 ```json
 {{
-  "question_components": ["component1", "component2", "..."],
+  "question_components": ["Analysis of component 1", "Information needed for component 2", "Winner of X event"],
   "coverage_assessment": {{
-    "component1": {{"coverage_percentage": 80, "quality": "good", "source_documents": [1, 2]}},
-    "component2": {{"coverage_percentage": 30, "quality": "poor", "source_documents": []}}
+    "Component 1": {{ "coverage_percentage": 90, "quality": "excellent", "source_tool": "document_retriever" }},
+    "Component 2": {{ "coverage_percentage": 0, "quality": "missing", "source_tool": "none" }},
+    "Component 3": {{ "coverage_percentage": 100, "quality": "good", "source_tool": "web_search" }}
   }},
-  "identified_gaps": ["gap1", "gap2"],
-  "overall_coverage_percentage": 65,
-  "reasoning": "Detailed explanation of the decision",
-  "final_decision": "sufficient"
+  "identified_gaps": ["Information about Component 2 is completely missing from all context."],
+  "overall_coverage_percentage": 63.33,
+  "reasoning": "The combined context successfully covers Component 1 (from documents) and Component 3 (from web search), but Component 2 is not addressed at all, making the total context insufficient.",
+  "final_decision": "insufficient"
 }}
 ```
 
 The final_decision field must be exactly "sufficient" or "insufficient".
 
-ASSESSMENT:"""
+<original_question>
+{original_question}
+</original_question>
+
+<document_context>
+{documents}
+</document_context>
+
+<web_context>
+{web_results}
+</web_context>
+
+Provide your JSON assessment of the combined context:"""
 
 
 class ContextAssessmentClient:
     """
     Context assessment client with Groq primary and Gemini fallback.
     
-    Uses Groq's llama3-8b-instruct for fast evaluation, with automatic
-    fallback to Gemini Flash if Groq fails.
+    Uses Groq's llama-3.3-70b-versatile for reliable Gap Analysis on complex
+    multi-part queries, with automatic fallback to Gemini Flash if Groq fails.
+    
+    CRITICAL: Upgraded from 8B to 70B to fix false negative bug (55% coverage
+    on perfect context), preventing unnecessary rewrite loop triggers.
     """
     
     def __init__(self):
@@ -125,13 +116,17 @@ class ContextAssessmentClient:
         self.metrics = []
         
         # Initialize Groq client
+        # CRITICAL: Upgraded to 70B model to fix false negative bug
+        # The 8B model was incorrectly flagging perfect context as insufficient (55% coverage)
+        # This triggered the entire buggy rewrite loop unnecessarily
+        # The 70B model provides reliable Gap Analysis for complex multi-part queries
         if GROQ_AVAILABLE and os.getenv("GROQ_API_KEY"):
             try:
                 self.groq_client = GroqModelClient(
-                    model_name="llama-3.1-8b-instant",
+                    model_name="llama-3.3-70b-versatile",  # Upgraded from 8B for reliability
                     enable_fallback=False  # We handle fallback manually
                 )
-                logger.info("✅ Context Assessment: Groq client initialized (llama-3.1-8b-instant)")
+                logger.info("✅ Context Assessment: Groq client initialized (llama-3.3-70b-versatile)")
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq client: {e}")
         
@@ -147,47 +142,70 @@ class ContextAssessmentClient:
             logger.error(f"Failed to initialize Gemini client: {e}")
             raise
     
-    def assess(self, original_question: str, documents: list) -> tuple[str, Dict[str, Any]]:
+    def assess(self, original_question: str, documents: list, web_search_results: list = None) -> tuple[str, Dict[str, Any], Dict[str, Any]]:
         """
         Assess context sufficiency using Groq (primary) or Gemini (fallback).
         
+        CRITICAL: Now TOOL-AWARE - analyzes COMBINED context from both documents and web results.
+        
         Args:
             original_question: User's original question
-            documents: List of retrieved documents
+            documents: List of retrieved documents from vectorstore
+            web_search_results: List of web search results (optional)
             
         Returns:
-            Tuple of (assessment_result, metrics_dict)
+            Tuple of (assessment_result, gap_analysis_json, metrics_dict)
             assessment_result is "sufficient" or "insufficient"
+            gap_analysis_json is the full JSON report from the LLM
         """
         start_time = time.time()
         
-        # Format documents
-        if not documents:
-            logger.info("No documents provided - returning insufficient")
-            return "insufficient", {
+        # Handle empty context
+        if not documents and not web_search_results:
+            logger.info("No documents or web results provided - returning insufficient")
+            return "insufficient", {"final_decision": "insufficient", "reasoning": "No context provided"}, {
                 "model": "none",
                 "latency_ms": 0,
                 "success": True,
                 "fallback_used": False
             }
         
+        # Format documents
         doc_texts = []
-        for i, doc in enumerate(documents, 1):
-            if hasattr(doc, 'page_content'):
-                doc_texts.append(f"Document {i}:\n{doc.page_content}")
-            else:
-                doc_texts.append(f"Document {i}:\n{str(doc)}")
+        if documents:
+            for i, doc in enumerate(documents, 1):
+                if hasattr(doc, 'page_content'):
+                    doc_texts.append(f"--- Document {i} (Source: {doc.metadata.get('source', 'N/A')}) ---\n{doc.page_content}")
+                else:
+                    doc_texts.append(f"--- Document {i} ---\n{str(doc)}")
         
-        documents_text = "\n\n".join(doc_texts)
+        documents_text = "\n\n".join(doc_texts) if doc_texts else "No documents were retrieved."
         
-        # Create prompt
+        # Format web results
+        web_texts = []
+        if web_search_results:
+            for i, result in enumerate(web_search_results, 1):
+                if hasattr(result, 'page_content'):
+                    web_texts.append(f"--- Web Result {i} (Source: {result.metadata.get('source', 'N/A')}) ---\n{result.page_content}")
+                elif isinstance(result, dict):
+                    content = result.get('content', str(result))
+                    source = result.get('url', result.get('source', 'N/A'))
+                    web_texts.append(f"--- Web Result {i} (Source: {source}) ---\n{content}")
+                else:
+                    web_texts.append(f"--- Web Result {i} ---\n{str(result)}")
+        
+        web_results_text = "\n\n".join(web_texts) if web_texts else "No web search results were retrieved."
+        
+        # Create prompt with BOTH sources
         prompt = CONTEXT_ASSESSMENT_PROMPT.format(
             original_question=original_question,
-            documents=documents_text
+            documents=documents_text,
+            web_results=web_results_text
         )
         
         logger.info(f"Assessing context sufficiency for: '{original_question[:100]}...'")
-        logger.info(f"Number of documents: {len(documents)}")
+        logger.info(f"Number of documents: {len(documents) if documents else 0}")
+        logger.info(f"Number of web results: {len(web_search_results) if web_search_results else 0}")
         
         # Try Groq first
         if self.groq_client:
@@ -199,11 +217,11 @@ class ContextAssessmentClient:
                     max_tokens=1024
                 )
                 
-                # Parse response
-                assessment = self._parse_assessment(response_text)
+                # Parse response - now returns (decision, json_dict)
+                assessment, gap_analysis_json = self._parse_assessment(response_text)
                 
                 metrics = {
-                    "model": "groq-llama3-8b",
+                    "model": "groq-llama3.3-70b",
                     "latency_ms": groq_metrics.latency_ms,
                     "tokens": groq_metrics.total_tokens,
                     "success": True,
@@ -216,7 +234,7 @@ class ContextAssessmentClient:
                 )
                 
                 self.metrics.append(metrics)
-                return assessment, metrics
+                return assessment, gap_analysis_json, metrics
                 
             except Exception as e:
                 logger.warning(f"Groq assessment failed: {e}, falling back to Gemini")
@@ -234,13 +252,14 @@ class ContextAssessmentClient:
             chain = prompt_template | self.gemini_client | StrOutputParser()
             response_text = chain.invoke({
                 "original_question": original_question,
-                "documents": documents_text
+                "documents": documents_text,
+                "web_results": web_results_text
             })
             
             gemini_latency = (time.time() - gemini_start) * 1000
             
-            # Parse response
-            assessment = self._parse_assessment(response_text)
+            # Parse response - now returns (decision, json_dict)
+            assessment, gap_analysis_json = self._parse_assessment(response_text)
             
             metrics = {
                 "model": "gemini-1.5-flash",
@@ -256,7 +275,7 @@ class ContextAssessmentClient:
             )
             
             self.metrics.append(metrics)
-            return assessment, metrics
+            return assessment, gap_analysis_json, metrics
             
         except Exception as e:
             logger.error(f"Both Groq and Gemini failed: {e}")
@@ -272,9 +291,9 @@ class ContextAssessmentClient:
             }
             
             self.metrics.append(metrics)
-            return "insufficient", metrics
+            return "insufficient", {"final_decision": "insufficient", "reasoning": "Both Groq and Gemini failed"}, metrics
     
-    def _parse_assessment(self, response_text: str) -> str:
+    def _parse_assessment(self, response_text: str) -> tuple[str, Dict[str, Any]]:
         """
         Parse assessment result from LLM response.
         
@@ -287,7 +306,7 @@ class ContextAssessmentClient:
             response_text: Raw LLM response
             
         Returns:
-            "sufficient" or "insufficient"
+            Tuple of ("sufficient" or "insufficient", full_json_dict)
         """
         logger.debug(f"Parsing assessment from {len(response_text)} chars")
         
@@ -333,7 +352,7 @@ class ContextAssessmentClient:
                     f"✅ Parsed JSON assessment: {final_decision} "
                     f"(coverage: {gap_analysis.get('overall_coverage_percentage', 'N/A')}%)"
                 )
-                return final_decision
+                return final_decision, gap_analysis  # Return both decision and full JSON
             else:
                 raise ValueError(f"Invalid final_decision: {final_decision}")
                 
@@ -346,21 +365,21 @@ class ContextAssessmentClient:
             if "final_decision" in assessment_lower:
                 if '"sufficient"' in assessment_lower or "'sufficient'" in assessment_lower:
                     logger.info("✅ String match: sufficient")
-                    return "sufficient"
+                    return "sufficient", {"final_decision": "sufficient", "reasoning": "Parsed from string match"}
                 elif '"insufficient"' in assessment_lower or "'insufficient'" in assessment_lower:
                     logger.info("❌ String match: insufficient")
-                    return "insufficient"
+                    return "insufficient", {"final_decision": "insufficient", "reasoning": "Parsed from string match"}
             
             # Secondary fallback
             if "sufficient" in assessment_lower and "insufficient" not in assessment_lower:
                 logger.info("✅ Simple match: sufficient")
-                return "sufficient"
+                return "sufficient", {"final_decision": "sufficient", "reasoning": "Simple string match"}
             elif "insufficient" in assessment_lower:
                 logger.info("❌ Simple match: insufficient")
-                return "insufficient"
+                return "insufficient", {"final_decision": "insufficient", "reasoning": "Simple string match"}
             else:
                 logger.warning("⚠️ Unclear result, defaulting to sufficient")
-                return "sufficient"
+                return "sufficient", {"final_decision": "sufficient", "reasoning": "Default fallback"}
     
     def get_metrics(self) -> list:
         """Get all collected metrics"""
@@ -379,19 +398,25 @@ def get_assessment_client() -> ContextAssessmentClient:
     return _assessment_client
 
 
-def assess_context_sufficiency(original_question: str, documents: list) -> str:
+def assess_context_sufficiency(original_question: str, documents: list, web_search_results: list = None) -> tuple[str, Dict[str, Any]]:
     """
-    Assess whether retrieved documents are sufficient to answer the question.
+    Assess whether retrieved context is sufficient to answer the question.
     
-    Uses Groq llama3-8b-instruct for fast evaluation with Gemini fallback.
+    CRITICAL: Now TOOL-AWARE - analyzes COMBINED context from both documents and web results.
+    
+    Uses Groq llama-3.3-70b-versatile for reliable Gap Analysis with Gemini fallback.
+    
+    Previous Bug: Only assessed documents, ignored web results → false "insufficient" on hybrid queries
+    Fix: Now accepts and analyzes both documents AND web_search_results
     
     Args:
         original_question: User's original question
-        documents: List of retrieved documents
+        documents: List of retrieved documents from vectorstore
+        web_search_results: List of web search results (optional)
         
     Returns:
-        "sufficient" or "insufficient"
+        Tuple of ("sufficient" or "insufficient", full_gap_analysis_json)
     """
     client = get_assessment_client()
-    assessment, metrics = client.assess(original_question, documents)
-    return assessment
+    assessment, gap_analysis_json, metrics = client.assess(original_question, documents, web_search_results)
+    return assessment, gap_analysis_json

@@ -585,9 +585,9 @@ async def ask_question(request: QuestionRequest):
             q_score = result['question_relevance_score']
             response['question_relevance_score'] = {
                 'binary_score': getattr(q_score, 'binary_score', None),
-                'relevance_score': getattr(q_score, 'relevance_score', None),
+                'relevance_score': getattr(q_score, 'confidence_score', None),  # Fixed: use confidence_score
                 'completeness': getattr(q_score, 'completeness', None),
-                'reasoning': getattr(q_score, 'reasoning', None),
+                'reasoning': getattr(q_score, 'explanation', None),  # Fixed: use explanation
                 'missing_aspects': getattr(q_score, 'missing_aspects', None)
             }
         
@@ -595,8 +595,8 @@ async def ask_question(request: QuestionRequest):
             d_score = result['document_relevance_score']
             response['document_relevance_score'] = {
                 'binary_score': getattr(d_score, 'binary_score', None),
-                'confidence': getattr(d_score, 'confidence', None),
-                'reasoning': getattr(d_score, 'reasoning', None)
+                'confidence': getattr(d_score, 'confidence_score', None),  # Fixed: use confidence_score
+                'reasoning': getattr(d_score, 'explanation', None)  # Fixed: use explanation
             }
         
         return JSONResponse(content=response)

@@ -33,3 +33,4 @@ venv
 md_files/
 screenshots/
 results/
+test_suite

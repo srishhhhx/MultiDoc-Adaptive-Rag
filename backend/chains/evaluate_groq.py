@@ -2,7 +2,7 @@
 Document Evaluation Chain with Groq Integration
 
 This module handles document relevance evaluation using Groq's fast inference
-with llama3-8b-instruct. Falls back to Gemini if Groq fails.
+with qwen3-32b. Falls back to Gemini if Groq fails.
 
 Key improvements:
 - 3-5x faster evaluation with Groq
@@ -67,6 +67,39 @@ class EvaluateDocs(BaseModel):
         if v is None:
             return "None"
         return v
+
+
+class DocumentEvaluation(BaseModel):
+    """
+    Single document evaluation result for batch processing
+    """
+    document_index: int = Field(
+        description="Index of the document in the provided list (0-based)"
+    )
+    is_relevant: str = Field(
+        description="Whether this document is relevant: 'yes', 'no', or 'partial'"
+    )
+    relevance_score: float = Field(
+        description="Relevance score between 0.0 and 1.0",
+        ge=0.0,
+        le=1.0,
+    )
+    coverage_assessment: str = Field(
+        description="Assessment of what this document covers"
+    )
+    missing_information: str = Field(
+        default="None",
+        description="What information is missing from this document"
+    )
+
+
+class BatchEvaluationResult(BaseModel):
+    """
+    Batch evaluation results for multiple documents
+    """
+    evaluations: list[DocumentEvaluation] = Field(
+        description="List of individual document evaluations"
+    )
 
 
 EVALUATION_PROMPT = """You are an expert document relevance evaluator for a RAG (Retrieval-Augmented Generation) system. Your role is to assess whether retrieved documents contain sufficient information to answer a user's query effectively.
@@ -138,6 +171,71 @@ IMPORTANT: Use the string "None" (not null) for missing_information if no inform
 Provide your comprehensive evaluation based on the framework above."""
 
 
+BATCH_EVALUATION_PROMPT = """You are an expert document relevance evaluator for a RAG (Retrieval-Augmented Generation) system. Your role is to assess whether retrieved documents contain sufficient information to answer a user's query effectively.
+
+**CRITICAL: BATCH EVALUATION MODE**
+You will be given a list of multiple documents. You must evaluate EACH document INDIVIDUALLY and return a JSON array with one evaluation per document.
+
+EVALUATION FRAMEWORK:
+
+1. TOPICAL RELEVANCE:
+   - Does this specific document directly address the main subject of the query?
+   - Are the key concepts and themes aligned with what the user is asking?
+
+2. INFORMATION SUFFICIENCY:
+   - Does this document contain enough detail to contribute to the answer?
+   - Are specific facts, data, or examples present when needed?
+
+3. INFORMATION QUALITY:
+   - Is the information in this document accurate and credible?
+   - Does this document contain conflicting statements?
+
+4. COMPLETENESS ASSESSMENT:
+   - What aspects of the query does this document cover?
+   - What information is missing from this document?
+
+SCORING CRITERIA:
+- **Score 'yes'** if the document contains substantial, directly relevant information
+- **Score 'partial'** if the document has some relevant information but is incomplete
+- **Score 'no'** if the document is off-topic or contains no useful information
+
+USER QUERY:
+{question}
+
+DOCUMENT LIST:
+{document_list}
+
+EVALUATION REQUIRED:
+You MUST provide your evaluation as a JSON object with an "evaluations" array. Each element in the array corresponds to one document in the order provided above.
+
+{{
+  "evaluations": [
+    {{
+      "document_index": 0,
+      "is_relevant": "yes" or "no" or "partial",
+      "relevance_score": 0.0 to 1.0,
+      "coverage_assessment": "what this document covers",
+      "missing_information": "what's missing from this document, or 'None'"
+    }},
+    {{
+      "document_index": 1,
+      "is_relevant": "yes" or "no" or "partial",
+      "relevance_score": 0.0 to 1.0,
+      "coverage_assessment": "what this document covers",
+      "missing_information": "what's missing from this document, or 'None'"
+    }}
+  ]
+}}
+
+**CRITICAL REQUIREMENTS:**
+1. You MUST return exactly {num_documents} evaluations (one per document)
+2. The document_index must match the document number (0-based)
+3. Use the string "None" (not null) for missing_information if nothing is missing
+4. Evaluate each document independently - don't compare documents to each other
+
+Provide your comprehensive batch evaluation now."""
+
+
 class DocumentEvaluationClient:
     """
     Document evaluation client with Groq primary and Gemini fallback.
@@ -153,10 +251,10 @@ class DocumentEvaluationClient:
         if GROQ_AVAILABLE and os.getenv("GROQ_API_KEY"):
             try:
                 self.groq_client = GroqModelClient(
-                    model_name="llama-3.1-8b-instant", enable_fallback=False
+                    model_name="qwen/qwen3-32b", enable_fallback=False
                 )
                 logger.info(
-                    "✅ Document Evaluation: Groq client initialized (llama-3.1-8b-instant)"
+                    "✅ Document Evaluation: Groq client initialized (qwen/qwen3-32b)"
                 )
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq client: {e}")
@@ -216,7 +314,7 @@ class DocumentEvaluationClient:
                 evaluation = EvaluateDocs(**response_dict)
 
                 metrics = {
-                    "model": "groq-llama3-8b",
+                    "model": "groq-qwen3-32b",
                     "latency_ms": groq_metrics.latency_ms,
                     "tokens": groq_metrics.total_tokens,
                     "success": True,
@@ -287,6 +385,157 @@ class DocumentEvaluationClient:
             self.metrics.append(metrics)
             return evaluation, metrics
 
+    def evaluate_batch(
+        self, question: str, documents: list, query_classification: str = "DOCUMENT_FIRST"
+    ) -> tuple[BatchEvaluationResult, Dict[str, Any]]:
+        """
+        Evaluate multiple documents in a single batch API call.
+        
+        This eliminates the N+1 query problem by processing all documents at once.
+        
+        Args:
+            question: User's query
+            documents: List of document objects or strings
+            query_classification: Query type classification
+            
+        Returns:
+            Tuple of (batch_evaluation_result, metrics_dict)
+        """
+        start_time = time.time()
+        
+        # Format documents for batch evaluation
+        document_list = []
+        for i, doc in enumerate(documents):
+            content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+            # Truncate very long documents to prevent token overflow
+            if len(content) > 1500:
+                content = content[:1500] + "... [truncated]"
+            document_list.append(f"--- Document [{i}] ---\n{content}")
+        
+        document_list_text = "\n\n".join(document_list)
+        
+        # Create batch prompt
+        prompt = BATCH_EVALUATION_PROMPT.format(
+            question=question,
+            document_list=document_list_text,
+            num_documents=len(documents)
+        )
+        
+        logger.info(f"🚀 BATCH EVALUATION: Processing {len(documents)} documents in single API call")
+        
+        # Try Groq first
+        if self.groq_client:
+            try:
+                logger.info("🚀 Using Groq for batch document evaluation...")
+                response_text, groq_metrics = self.groq_client.infer(
+                    prompt=prompt, 
+                    temperature=0.0, 
+                    max_tokens=2048,  # Increased for batch results
+                    json_mode=True
+                )
+                
+                # Parse JSON response
+                response_dict = json.loads(response_text)
+                
+                # Validate we got the right number of evaluations
+                if len(response_dict.get("evaluations", [])) != len(documents):
+                    logger.warning(
+                        f"Expected {len(documents)} evaluations, got {len(response_dict.get('evaluations', []))}. "
+                        "Falling back to individual evaluation."
+                    )
+                    raise ValueError("Incorrect number of evaluations returned")
+                
+                # Handle None values in missing_information
+                for eval_dict in response_dict["evaluations"]:
+                    if eval_dict.get("missing_information") is None:
+                        eval_dict["missing_information"] = "None"
+                
+                batch_result = BatchEvaluationResult(**response_dict)
+                
+                metrics = {
+                    "model": "groq-qwen3-32b",
+                    "latency_ms": groq_metrics.latency_ms,
+                    "tokens": groq_metrics.total_tokens,
+                    "success": True,
+                    "fallback_used": False,
+                    "documents_evaluated": len(documents),
+                    "batch_mode": True
+                }
+                
+                logger.info(
+                    f"✅ Groq batch evaluation complete: {len(batch_result.evaluations)} documents "
+                    f"({groq_metrics.latency_ms:.0f}ms total, "
+                    f"{groq_metrics.latency_ms/len(documents):.0f}ms per doc)"
+                )
+                
+                self.metrics.append(metrics)
+                return batch_result, metrics
+                
+            except Exception as e:
+                logger.warning(f"Groq batch evaluation failed: {e}, falling back to Gemini")
+        
+        # Fallback to Gemini
+        try:
+            logger.info("🔄 Using Gemini fallback for batch document evaluation...")
+            gemini_start = time.time()
+            
+            # Use Gemini's structured output
+            structured_llm = self.gemini_client.with_structured_output(BatchEvaluationResult)
+            batch_result = structured_llm.invoke(prompt)
+            
+            gemini_latency = (time.time() - gemini_start) * 1000
+            
+            metrics = {
+                "model": "gemini-2.0-flash",
+                "latency_ms": gemini_latency,
+                "tokens": 0,
+                "success": True,
+                "fallback_used": True,
+                "documents_evaluated": len(documents),
+                "batch_mode": True
+            }
+            
+            logger.info(
+                f"✅ Gemini batch evaluation complete: {len(batch_result.evaluations)} documents "
+                f"({gemini_latency:.0f}ms total, "
+                f"{gemini_latency/len(documents):.0f}ms per doc)"
+            )
+            
+            self.metrics.append(metrics)
+            return batch_result, metrics
+            
+        except Exception as e:
+            logger.error(f"Both Groq and Gemini batch evaluation failed: {e}")
+            total_latency = (time.time() - start_time) * 1000
+            
+            # Return default evaluations for all documents
+            default_evaluations = [
+                DocumentEvaluation(
+                    document_index=i,
+                    is_relevant="yes",
+                    relevance_score=0.5,
+                    coverage_assessment="Evaluation failed",
+                    missing_information="Unable to evaluate due to error"
+                )
+                for i in range(len(documents))
+            ]
+            
+            batch_result = BatchEvaluationResult(evaluations=default_evaluations)
+            
+            metrics = {
+                "model": "none",
+                "latency_ms": total_latency,
+                "tokens": 0,
+                "success": False,
+                "fallback_used": True,
+                "documents_evaluated": len(documents),
+                "batch_mode": True,
+                "error": str(e)
+            }
+            
+            self.metrics.append(metrics)
+            return batch_result, metrics
+
     def get_metrics(self) -> list:
         """Get all collected metrics"""
         return self.metrics
@@ -310,7 +559,7 @@ def evaluate_documents(
     """
     Evaluate document relevance for a query.
 
-    Uses Groq llama3-8b-instruct for fast evaluation with Gemini fallback.
+    Uses Groq qwen3-32b for fast evaluation with Gemini fallback.
 
     Args:
         question: User's query
@@ -323,3 +572,27 @@ def evaluate_documents(
     client = get_evaluation_client()
     evaluation, metrics = client.evaluate(question, document, query_classification)
     return evaluation
+
+
+def evaluate_documents_batch(
+    question: str, documents: list, query_classification: str = "DOCUMENT_FIRST"
+) -> BatchEvaluationResult:
+    """
+    Evaluate multiple documents in a single batch API call.
+    
+    This is the recommended method for evaluating multiple documents as it
+    eliminates the N+1 query problem and significantly reduces latency.
+    
+    Uses Groq qwen3-32b for fast evaluation with Gemini fallback.
+    
+    Args:
+        question: User's query
+        documents: List of document objects or strings
+        query_classification: Query type classification
+        
+    Returns:
+        BatchEvaluationResult with list of individual document evaluations
+    """
+    client = get_evaluation_client()
+    batch_result, metrics = client.evaluate_batch(question, documents, query_classification)
+    return batch_result

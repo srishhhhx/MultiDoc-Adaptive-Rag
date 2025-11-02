@@ -101,6 +101,11 @@ class GroqModelClient:
             "name": "groq/compound-mini",
             "context_window": 131072,
             "description": "Groq Compound Mini - Fast classification"
+        },
+        "qwen/qwen3-32b": {
+            "name": "qwen/qwen3-32b",
+            "context_window": 32768,
+            "description": "Qwen 3 32B - Advanced reasoning and analysis"
         }
     }
     

@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import axios from "axios";
 import TypewriterFormattedAnswer from "./TypewriterFormattedAnswer";
 import CircularGauge from "./CircularGauge";
+import ProgressBar from "./ProgressBar";
 
 const QuestionAnswer = ({ sessionId }) => {
   const [question, setQuestion] = useState("");
@@ -85,6 +86,14 @@ const QuestionAnswer = ({ sessionId }) => {
         </form>
       </div>
 
+      {/* Progress Bar */}
+      <ProgressBar 
+        isVisible={loading} 
+        onComplete={() => {
+          // Progress bar completion is handled by the actual API response
+        }} 
+      />
+
       {/* Error Message */}
       {error && (
         <div className="bg-gradient-to-r from-[#2a0a0a] to-[#1a0505] border border-[#ff6b6b]/20 rounded-2xl p-4 mb-6 backdrop-blur-sm">
@@ -157,10 +166,10 @@ const QuestionAnswer = ({ sessionId }) => {
                 {/* Metrics Display with Circular Gauges */}
                 <div className="grid grid-cols-2 gap-8">
                   {/* Question-Answer Relevance */}
-                  {answer.question_relevance_score && answer.question_relevance_score.relevance_score !== null && (
+                  {answer.question_relevance_score && (
                     <div className="flex flex-col items-center">
                       <CircularGauge
-                        value={answer.question_relevance_score.relevance_score * 100}
+                        value={answer.question_relevance_score.relevance_score !== null ? (answer.question_relevance_score.relevance_score * 100) : (answer.question_relevance_score.binary_score ? 85 : 15)}
                         max={100}
                         size="lg"
                         color={answer.question_relevance_score.binary_score ? 'green' : 'red'}
@@ -199,10 +208,10 @@ const QuestionAnswer = ({ sessionId }) => {
                   )}
 
                   {/* Document Grounding */}
-                  {answer.document_relevance_score && answer.document_relevance_score.confidence !== null && (
+                  {answer.document_relevance_score && (
                     <div className="flex flex-col items-center">
                       <CircularGauge
-                        value={answer.document_relevance_score.confidence * 100}
+                        value={answer.document_relevance_score.confidence !== null ? (answer.document_relevance_score.confidence * 100) : (answer.document_relevance_score.binary_score ? 90 : 10)}
                         max={100}
                         size="lg"
                         color={answer.document_relevance_score.binary_score ? 'blue' : 'red'}
@@ -261,7 +270,14 @@ const QuestionAnswer = ({ sessionId }) => {
                       <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
                       <path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clipRule="evenodd" />
                     </svg>
-                    {answer.document_evaluations.length} DOCS
+                    {(() => {
+                      const validScores = answer.document_evaluations
+                        .filter(e => e.relevance_score !== null && e.relevance_score !== undefined)
+                        .map(e => e.relevance_score);
+                      if (validScores.length === 0) return `${answer.document_evaluations.length} DOCS`;
+                      const avgScore = Math.round((validScores.reduce((a, b) => a + b, 0) / validScores.length) * 100);
+                      return `${avgScore}%`;
+                    })()}
                   </div>
                 </div>
                 
@@ -322,23 +338,23 @@ const QuestionAnswer = ({ sessionId }) => {
                                     cy="32"
                                     r="28"
                                     stroke={
-                                      evaluation.relevance_score >= 70 
+                                      (evaluation.relevance_score * 100) >= 70 
                                         ? '#22c55e'
-                                        : evaluation.relevance_score >= 40
+                                        : (evaluation.relevance_score * 100) >= 40
                                         ? '#fbbf24'
                                         : '#ff6b6b'
                                     }
                                     strokeWidth="6"
                                     fill="none"
                                     strokeDasharray={`${2 * Math.PI * 28}`}
-                                    strokeDashoffset={`${2 * Math.PI * 28 * (1 - evaluation.relevance_score / 100)}`}
+                                    strokeDashoffset={`${2 * Math.PI * 28 * (1 - evaluation.relevance_score)}`}
                                     strokeLinecap="round"
                                     className="transition-all duration-1000 ease-out"
                                     style={{
                                       filter: `drop-shadow(0 0 6px ${
-                                        evaluation.relevance_score >= 70 
+                                        (evaluation.relevance_score * 100) >= 70 
                                           ? 'rgba(34, 197, 94, 0.6)'
-                                          : evaluation.relevance_score >= 40
+                                          : (evaluation.relevance_score * 100) >= 40
                                           ? 'rgba(251, 191, 36, 0.6)'
                                           : 'rgba(255, 107, 107, 0.6)'
                                       })`
@@ -348,27 +364,27 @@ const QuestionAnswer = ({ sessionId }) => {
                                 {/* Center percentage */}
                                 <div className="absolute inset-0 flex items-center justify-center">
                                   <span className={`text-sm font-black ${
-                                    evaluation.relevance_score >= 70 
+                                    (evaluation.relevance_score * 100) >= 70 
                                       ? 'text-[#22c55e]'
-                                      : evaluation.relevance_score >= 40
+                                      : (evaluation.relevance_score * 100) >= 40
                                       ? 'text-[#fbbf24]'
                                       : 'text-[#ff6b6b]'
                                   }`}>
-                                    {evaluation.relevance_score}
+                                    {Math.round(evaluation.relevance_score * 100)}
                                   </span>
                                 </div>
                               </div>
                               
                               {/* Status indicator */}
                               <div className={`px-3 py-1.5 rounded-lg ${
-                                evaluation.relevance_score >= 70 
+                                (evaluation.relevance_score * 100) >= 70 
                                   ? 'bg-[#22c55e]/10 text-[#22c55e]'
-                                  : evaluation.relevance_score >= 40
+                                  : (evaluation.relevance_score * 100) >= 40
                                   ? 'bg-[#fbbf24]/10 text-[#fbbf24]'
                                   : 'bg-[#ff6b6b]/10 text-[#ff6b6b]'
                               }`}>
                                 <div className="text-[10px] font-bold uppercase tracking-wider">
-                                  {evaluation.relevance_score >= 70 ? 'High' : evaluation.relevance_score >= 40 ? 'Medium' : 'Low'}
+                                  {(evaluation.relevance_score * 100) >= 70 ? 'High' : (evaluation.relevance_score * 100) >= 40 ? 'Medium' : 'Low'}
                                 </div>
                               </div>
                             </div>

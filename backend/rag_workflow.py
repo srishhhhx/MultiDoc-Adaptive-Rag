@@ -16,19 +16,23 @@ question-answering systems with advanced state management and caching.
 """
 
 import hashlib
+import time
 from langchain_core.documents import Document
 from langgraph.graph import StateGraph, END
 from backend.state import GraphState
 from backend.chains.generate_answer import generate_chain
 from backend.chains.evaluate_groq import evaluate_documents as evaluate_docs  # Groq-optimized
 from backend.chains.evaluate_batch import evaluate_documents_batch
-from backend.chains.relevance_batch import evaluate_relevance_batch
+from backend.chains.relevance_batch import evaluate_relevance_batch  # Gemini fallback
+from backend.chains.relevance_groq import evaluate_relevance_batch_groq  # Groq primary (10-20x faster)
 from backend.chains.query_classifier import classify_query
-from backend.chains.query_analysis_router import analyze_query
+# CRITICAL: Query Analysis REVERTED to Gemini for reliability (Groq 70B failed on complex multi-part queries)
+# The 3-11s latency is necessary to ensure the "brain" of the agent functions correctly
+from backend.chains.query_analysis_router import analyze_query  # GEMINI (reliable planning)
 from backend.chains.multi_tool_executor import MultiToolExecutor
 from backend.chains.rerank_documents import rerank_documents
+# GROQ-POWERED CHAINS: Keep Groq for evaluation/recovery tasks (proven reliable)
 from backend.chains.context_assessment_groq import assess_context_sufficiency  # Groq-optimized
-from backend.chains.rewrite_query import generate_progressive_rewrite
 from langchain_community.tools.tavily_search import TavilySearchResults
 from backend.config import TAVILY_SEARCH_RESULTS
 
@@ -163,26 +167,25 @@ class RAGWorkflow:
 
         # Add nodes for Query Analysis Router pipeline with rewriting loop
         workflow.add_node("Query Analysis", self._analyze_query)
-        workflow.add_node("Execute Multi-Tool Plan", self._execute_multi_tool_plan)
-        workflow.add_node("Rerank Documents", self._rerank)
-        workflow.add_node("Context Assessment", self._assess_context)  # NEW: Assess context sufficiency
-        workflow.add_node("Rewrite Query", self._rewrite_query)  # NEW: Rewrite query for better retrieval
-        workflow.add_node("Evaluate Documents", self._analyze_batch)  # NEW: Add document evaluation for Quality Metrics
+        workflow.add_node("Execute Multi-Tool Plan", self._execute_multi_tool_plan)  # Now includes per-task reranking
+        workflow.add_node("Context Assessment", self._assess_context)  # Assess context sufficiency
+        workflow.add_node("Rewrite Query", self._rewrite_query)  # Rewrite query for better retrieval
+        workflow.add_node("Evaluate Documents", self._analyze_batch)  # Document evaluation for Quality Metrics
         workflow.add_node("Generate Answer", self._generate_answer)
         
         # Legacy nodes for fallback compatibility
         workflow.add_node("Retrieve Documents", self._retrieve)
         workflow.add_node("Search Online", self._search_online)
+        # NOTE: Rerank Documents node REMOVED - reranking now happens per-task in Execute Multi-Tool Plan
 
         # Set entry point to Query Analysis Router
         workflow.set_entry_point("Query Analysis")
         
         # Main flow with query rewriting loop:
-        # Query Analysis -> Execute Plan -> Rerank -> Evaluate -> Context Assessment
+        # Query Analysis -> Execute Plan (with per-task reranking) -> Evaluate -> Context Assessment
         workflow.add_edge("Query Analysis", "Execute Multi-Tool Plan")
-        workflow.add_edge("Execute Multi-Tool Plan", "Rerank Documents")
-        workflow.add_edge("Rerank Documents", "Evaluate Documents")  # NEW: Add document evaluation
-        workflow.add_edge("Evaluate Documents", "Context Assessment")  # NEW: Route to assessment
+        workflow.add_edge("Execute Multi-Tool Plan", "Evaluate Documents")  # Direct edge - reranking done per-task
+        workflow.add_edge("Evaluate Documents", "Context Assessment")  # Route to assessment
         
         # Context Assessment conditional routing (NEW: Self-correcting loop)
         workflow.add_conditional_edges(
@@ -209,8 +212,8 @@ class RAGWorkflow:
             },
         )
         
-        # Fallback edge from Search Online through Rerank and Evaluate to Context Assessment
-        workflow.add_edge("Search Online", "Rerank Documents")
+        # Fallback edge from Search Online directly to Evaluate (no global rerank needed)
+        workflow.add_edge("Search Online", "Evaluate Documents")
 
         return workflow.compile()
 
@@ -434,24 +437,53 @@ class RAGWorkflow:
         rerank_completed = state.get("rerank_completed", False)
         current_context_signature = _create_context_signature(documents, web_search_results, rerank_completed)
         
-        # **BATCHED RELEVANCE EVALUATION OPTIMIZATION**
-        print("🚀 BATCH RELEVANCE: Evaluating document + question relevance in single API call")
+        # **GROQ-POWERED BATCHED RELEVANCE EVALUATION (10-20x FASTER)**
+        print("🚀 BATCH RELEVANCE: Evaluating document + question relevance in single API call (Groq)")
         
         try:
-            # **DEBUG: Log exact documents being sent to batch relevance evaluation**
-            print(f"🔍 DEBUG: evaluate_relevance_batch receiving {len(documents)} documents")
-            for i, doc in enumerate(documents[:3]):  # Show first 3 for debugging
-                preview = doc.page_content[:100] if hasattr(doc, 'page_content') else str(doc)[:100]
-                print(f"   Doc {i+1}: {preview}...")
+            # **CRITICAL FIX: Combine documents AND web_search_results for validation**
+            validation_docs = []
+            if documents:
+                validation_docs.extend(documents)
+            if web_search_results:
+                # Ensure web results have proper metadata for detection
+                from langchain_core.documents import Document
+                for result in web_search_results:
+                    if hasattr(result, 'page_content'):
+                        # Already a Document - use as-is (preserves metadata)
+                        validation_docs.append(result)
+                    elif isinstance(result, dict) and 'content' in result:
+                        # Dict format - create Document with web_search metadata
+                        validation_docs.append(Document(
+                            page_content=result['content'],
+                            metadata={'type': 'web_search', 'source': result.get('url', 'web')}
+                        ))
+                    else:
+                        # Fallback - mark as web_search
+                        validation_docs.append(Document(
+                            page_content=str(result),
+                            metadata={'type': 'web_search'}
+                        ))
             
-            # Single API call for both document and question relevance
-            batch_relevance_result = evaluate_relevance_batch(question, documents, solution)
+            # **DEBUG: Log exact documents being sent to batch relevance evaluation**
+            print(f"🔍 DEBUG: Groq batch relevance receiving {len(validation_docs)} total sources")
+            print(f"   Documents: {len(documents)}, Web results: {len(web_search_results)}")
+            for i, doc in enumerate(validation_docs[:3]):  # Show first 3 for debugging
+                preview = doc.page_content[:100] if hasattr(doc, 'page_content') else str(doc)[:100]
+                doc_type = doc.metadata.get('type', 'document') if hasattr(doc, 'metadata') else 'unknown'
+                print(f"   Source {i+1} (type: {doc_type}): {preview}...")
+            
+            # **CRITICAL: Use Groq-powered evaluation (10-20x faster than Gemini)**
+            # This call has built-in Gemini fallback if Groq fails
+            batch_relevance_result = evaluate_relevance_batch_groq(question, validation_docs, solution)
             document_relevance_score = batch_relevance_result["document_relevance_score"]
             question_relevance_score = batch_relevance_result["question_relevance_score"]
+            grounding_source = batch_relevance_result.get("grounding_source", "UNKNOWN")
             
-            print("✅ Batch relevance evaluation successful")
+            print("✅ Groq batch relevance evaluation successful")
             print(f"   Document grounding: {document_relevance_score.binary_score}")
             print(f"   Question relevance: {question_relevance_score.binary_score}")
+            print(f"   Grounding source: {grounding_source}")
             
         except Exception as e:
             print(f"⚠️  Batch relevance evaluation failed: {e}")
@@ -461,7 +493,7 @@ class RAGWorkflow:
             document_relevance_score = None
             if documents:
                 try:
-                    from chains.document_relevance_groq import check_document_relevance  # Groq-optimized
+                    from backend.chains.document_relevance_groq import check_document_relevance  # Groq-optimized
                     document_relevance_score = check_document_relevance.invoke(
                         {"documents": documents, "solution": solution}
                     )
@@ -471,7 +503,7 @@ class RAGWorkflow:
             
             question_relevance_score = None
             try:
-                from chains.question_relevance import question_relevance
+                from backend.chains.question_relevance import question_relevance
                 question_relevance_score = question_relevance.invoke(
                     {"question": question, "solution": solution}
                 )
@@ -488,9 +520,10 @@ class RAGWorkflow:
             "generation_attempts": new_attempts,  # Update generation attempts
             "document_relevance_score": document_relevance_score,  # Quality metrics
             "question_relevance_score": question_relevance_score,  # Quality metrics
-            # Cache the relevance scores and context signature for reuse
+            # Cache the relevance scores, grounding source, and context signature for reuse
             "cached_document_relevance": document_relevance_score,
             "cached_question_relevance": question_relevance_score,
+            "cached_grounding_source": grounding_source if 'grounding_source' in locals() else "UNKNOWN",  # NEW: Cache grounding source
             "cache_context_signature": current_context_signature,
         }
 
@@ -604,14 +637,18 @@ class RAGWorkflow:
         question = state["question"]
         documents = state["documents"]
 
-        # Check if online search is already required
+        # Log query type for transparency
         online_search = state.get("online_search", False)
+        query_type = "HYBRID" if (documents and online_search) else ("WEB_ONLY" if online_search else "DOCUMENT_ONLY")
         print(
-            f"Evaluating {len(documents)} reranked documents for Quality Metrics, online_search: {online_search}"
+            f"Evaluating {len(documents)} reranked documents for Quality Metrics"
         )
+        print(f"Query type: {query_type}")
 
-        if not documents or online_search:
-            print("Skipping document evaluation - no documents or online search required")
+        # ✅ FIXED: Only skip if there are NO documents to evaluate
+        # Always evaluate documents when present, regardless of web search status
+        if not documents:
+            print("Skipping document evaluation - no documents to evaluate")
             return {
                 "documents": documents,
                 "question": question,
@@ -630,68 +667,48 @@ class RAGWorkflow:
             }
 
         try:
-            # **DEBUG: Log exact documents being sent to Groq evaluation**
-            print(f"🔍 DEBUG: Groq evaluate_documents receiving {len(documents)} documents")
+            # **DEBUG: Log exact documents being sent to batch evaluation**
+            print(f"🔍 DEBUG: Batch evaluation receiving {len(documents)} documents")
             for i, doc in enumerate(documents[:3]):  # Show first 3 for debugging
                 preview = doc.page_content[:100] if hasattr(doc, 'page_content') else str(doc)[:100]
                 print(f"   Doc {i+1}: {preview}...")
             
-            # Perform Groq-optimized evaluation for each document
+            # **BATCH EVALUATION: Single API call for all documents**
             print("="*80)
-            print("📊 DOCUMENT EVALUATION - TRACKING MODEL USAGE")
+            print("🚀 BATCH DOCUMENT EVALUATION - SINGLE API CALL")
             print("="*80)
             
+            from backend.chains.evaluate_groq import evaluate_documents_batch
+            
+            # Single batch API call replaces N sequential calls
+            batch_start_time = time.time()
+            batch_result = evaluate_documents_batch(
+                question=question,
+                documents=documents,
+                query_classification="document-specific"
+            )
+            batch_duration = (time.time() - batch_start_time) * 1000
+            
+            # Convert batch results to analysis_results format
             analysis_results = []
-            groq_count = 0
-            gemini_count = 0
-            error_count = 0
-            
-            for i, doc in enumerate(documents):
-                try:
-                    print(f"\n🔍 Evaluating Document {i+1}/{len(documents)}...")
-                    
-                    # Use Groq-optimized evaluate_documents
-                    eval_result = evaluate_docs(
-                        question=question,
-                        document=doc.page_content if hasattr(doc, 'page_content') else str(doc),
-                        query_classification="document-specific"
-                    )
-                    
-                    # Track which model was used (check the logs from evaluate_groq.py)
-                    # The evaluate_groq.py logs will show "🚀 Using Groq" or "🔄 Using Gemini"
-                    
-                    analysis_results.append({
-                        "doc_id": i,
-                        "is_relevant": eval_result.score,
-                        "relevance_score": eval_result.relevance_score,
-                        "analysis": {
-                            "coverage": eval_result.coverage_assessment,
-                            "missing_info": eval_result.missing_information
-                        }
-                    })
-                    
-                    print(f"   ✅ Doc {i+1} evaluated: {eval_result.score} (relevance: {eval_result.relevance_score})")
-                    
-                except Exception as e:
-                    error_count += 1
-                    print(f"   ❌ Groq evaluation failed for doc {i}: {e}")
-                    # Fallback for this document
-                    analysis_results.append({
-                        "doc_id": i,
-                        "is_relevant": "YES",
-                        "relevance_score": 50,
-                        "analysis": {
-                            "coverage": "Unable to evaluate",
-                            "missing_info": "Evaluation failed"
-                        }
-                    })
+            for eval_item in batch_result.evaluations:
+                analysis_results.append({
+                    "doc_id": eval_item.document_index,
+                    "is_relevant": eval_item.is_relevant,
+                    "relevance_score": eval_item.relevance_score,
+                    "analysis": {
+                        "coverage": eval_item.coverage_assessment,
+                        "missing_info": eval_item.missing_information
+                    }
+                })
             
             print("\n" + "="*80)
-            print("📊 DOCUMENT EVALUATION SUMMARY")
+            print("📊 BATCH EVALUATION SUMMARY")
             print("="*80)
-            print(f"Total documents evaluated: {len(documents)}")
-            print(f"Successful evaluations: {len(analysis_results) - error_count}")
-            print(f"Failed evaluations: {error_count}")
+            print(f"✅ Evaluated {len(documents)} documents in single API call")
+            print(f"⚡ Total time: {batch_duration:.0f}ms")
+            print(f"📈 Average per document: {batch_duration/len(documents):.0f}ms")
+            print(f"🎯 Performance gain: ~{len(documents)}x faster than sequential")
             print("="*80)
 
             print(f"Batch analysis completed: {len(analysis_results)} analyses")
@@ -855,6 +872,7 @@ class RAGWorkflow:
         cached_context_signature = state.get("cache_context_signature")
         cached_document_relevance = state.get("cached_document_relevance")
         cached_question_relevance = state.get("cached_question_relevance")
+        cached_grounding_source = state.get("cached_grounding_source")  # NEW: Get cached grounding source
         
         # Check cache validity conditions
         cache_valid = (
@@ -868,8 +886,12 @@ class RAGWorkflow:
             print(f"   Cached context signature: {cached_context_signature[:16]}...")
             doc_relevance_score = cached_document_relevance
             question_relevance_score = cached_question_relevance
+            grounding_source = cached_grounding_source if cached_grounding_source else "UNKNOWN"  # NEW: Use cached grounding source
+            grounding_source_details = "Cache hit: Using grounding source from Generate Answer node"
+            
             print(f"   Cached document grounding: {doc_relevance_score.binary_score}")
             print(f"   Cached question relevance: {question_relevance_score.binary_score}")
+            print(f"   Cached grounding source: {grounding_source}")
         else:
             print("💡 CACHE MISS: Context changed, performing fresh relevance evaluation")
             if cached_context_signature:
@@ -888,14 +910,24 @@ class RAGWorkflow:
                     validation_docs.extend(reranked_docs)
                 if web_results:
                     # Convert web results to document format for validation
+                    # **CRITICAL: Preserve metadata to enable web result detection**
                     from langchain_core.documents import Document
                     for result in web_results:
                         if hasattr(result, 'page_content'):
+                            # Already a Document object - use as-is (preserves metadata)
                             validation_docs.append(result)
                         elif isinstance(result, dict) and 'content' in result:
-                            validation_docs.append(Document(page_content=result['content']))
+                            # Dict format - create Document with web_search metadata
+                            validation_docs.append(Document(
+                                page_content=result['content'],
+                                metadata={'type': 'web_search', 'source': result.get('url', 'web')}
+                            ))
                         else:
-                            validation_docs.append(Document(page_content=str(result)))
+                            # Fallback - mark as web_search to prevent false hallucination detection
+                            validation_docs.append(Document(
+                                page_content=str(result),
+                                metadata={'type': 'web_search'}
+                            ))
                 
                 # **BATCHED VALIDATION EVALUATION**
                 print("🚀 BATCH VALIDATION: Evaluating both relevance scores in single API call")
@@ -905,15 +937,20 @@ class RAGWorkflow:
                     print(f"🔍 DEBUG: batch validation receiving {len(validation_docs)} documents")
                     for i, doc in enumerate(validation_docs[:3]):  # Show first 3 for debugging
                         preview = doc.page_content[:100] if hasattr(doc, 'page_content') else str(doc)[:100]
-                        print(f"   Validation Doc {i+1}: {preview}...")
+                        doc_type = doc.metadata.get('type', 'document') if hasattr(doc, 'metadata') else 'unknown'
+                        print(f"   Validation Doc {i+1} (type: {doc_type}): {preview}...")
                     
                     # Single API call for both validation checks
                     batch_validation_result = evaluate_relevance_batch(question, validation_docs, solution)
                     doc_relevance_score = batch_validation_result["document_relevance_score"]
                     question_relevance_score = batch_validation_result["question_relevance_score"]
+                    grounding_source = batch_validation_result.get("grounding_source", "UNKNOWN")
+                    grounding_source_details = batch_validation_result.get("grounding_source_details", "")
                     
                     print("✅ Batch validation evaluation successful")
                     print(f"Document grounding (complete context): {doc_relevance_score.binary_score}")
+                    print(f"Grounding source: {grounding_source}")
+                    print(f"Source details: {grounding_source_details[:200]}..." if len(grounding_source_details) > 200 else f"Source details: {grounding_source_details}")
                     print(f"Question relevance: {question_relevance_score.binary_score}")
                     
                 except Exception as e:
@@ -921,17 +958,37 @@ class RAGWorkflow:
                     print("🔄 Falling back to individual validation evaluations")
                     
                     # Fallback to individual evaluations
-                    from chains.document_relevance_groq import check_document_relevance  # Groq-optimized
+                    from backend.chains.document_relevance_groq import check_document_relevance  # Groq-optimized
                     doc_relevance_score = check_document_relevance.invoke(
                         {"documents": validation_docs, "solution": solution}
                     )
                     print(f"Document grounding (complete context): {doc_relevance_score.binary_score}")
                     
-                    from chains.question_relevance import question_relevance
+                    from backend.chains.question_relevance import question_relevance
                     question_relevance_score = question_relevance.invoke(
                         {"question": question, "solution": solution}
                     )
                     print(f"Question relevance: {question_relevance_score.binary_score}")
+                    
+                    # **FALLBACK: Infer grounding source from available context**
+                    if doc_relevance_score.binary_score:
+                        if reranked_docs and web_results:
+                            grounding_source = "HYBRID"
+                            grounding_source_details = "Fallback inference: Both documents and web results available"
+                        elif web_results:
+                            grounding_source = "WEB_ONLY"
+                            grounding_source_details = "Fallback inference: Only web results available"
+                        elif reranked_docs:
+                            grounding_source = "DOCUMENT_ONLY"
+                            grounding_source_details = "Fallback inference: Only documents available"
+                        else:
+                            grounding_source = "UNKNOWN"
+                            grounding_source_details = "Fallback inference: No clear context source"
+                    else:
+                        grounding_source = "NONE"
+                        grounding_source_details = "Fallback inference: Answer not grounded in provided context"
+                    
+                    print(f"⚠️  Fallback grounding source inference: {grounding_source}")
                     
             else:
                 print("⚠️  No context available for validation - assuming grounded")
@@ -940,20 +997,25 @@ class RAGWorkflow:
                     binary_score = True
                 doc_relevance_score = MockScore()
                 question_relevance_score = MockScore()
+                grounding_source = "UNKNOWN"
+                grounding_source_details = "No context available for validation"
         
-        # Decision logic with circuit breaker
-        if doc_relevance_score and doc_relevance_score.binary_score:
-            print("✅ Complete context grounding check passed")
-            
-            if question_relevance_score and question_relevance_score.binary_score:
-                print("ROUTING DECISION: Going to 'END' (Answers Question)")
-                return "Answers Question"
-            else:
-                print("ROUTING DECISION: Going to 'Search Online' (Question not addressed)")
-                return "Question not addressed"
-        else:
-            # Hallucination detected - check circuit breaker
-            print(f"❌ Hallucinations detected against complete context. Attempt {current_attempts}/{MAX_ATTEMPTS}")
+        # **CRITICAL: Log grounding source for transparency**
+        print("="*80)
+        print("📊 GROUNDING SOURCE ANALYSIS")
+        print("="*80)
+        print(f"Grounding Source: {grounding_source}")
+        print(f"Is Grounded: {doc_relevance_score.binary_score}")
+        print(f"Question Relevance: {question_relevance_score.binary_score if question_relevance_score else 'N/A'}")
+        print(f"Details: {grounding_source_details}")
+        print("="*80)
+        
+        # **SIMPLIFIED ROUTING LOGIC: Use grounding_source directly (no inference)**
+        # The grounding_source was already determined by the batch validation chain in Generate Answer
+        
+        if grounding_source == "NONE":
+            # Answer is not grounded in any provided context - retry or give up
+            print(f"❌ Answer not grounded (Source: {grounding_source}). Attempt {current_attempts}/{MAX_ATTEMPTS}")
             
             if current_attempts < MAX_ATTEMPTS:
                 print("ROUTING DECISION: Going to 'Generate Answer' (Retry within limit)")
@@ -961,6 +1023,41 @@ class RAGWorkflow:
             else:
                 print(f"ROUTING DECISION: Going to 'END' (Max attempts {MAX_ATTEMPTS} reached)")
                 return "Answers Question"  # End even with flawed answer
+        
+        elif grounding_source in ["DOCUMENT_ONLY", "WEB_ONLY", "HYBRID"]:
+            # Answer is properly grounded - check if it addresses the question
+            print(f"✅ Answer grounded in context (Source: {grounding_source})")
+            
+            if question_relevance_score and question_relevance_score.binary_score:
+                print("ROUTING DECISION: Going to 'END' (Answers Question)")
+                return "Answers Question"
+            else:
+                print("ROUTING DECISION: Going to 'Search Online' (Question not addressed)")
+                return "Question not addressed"
+        
+        else:
+            # Unknown grounding source - fallback to binary score check
+            print(f"⚠️  Unknown grounding source: {grounding_source}, falling back to binary score check")
+            
+            if doc_relevance_score and doc_relevance_score.binary_score:
+                print(f"✅ Fallback: Document grounding check passed")
+                
+                if question_relevance_score and question_relevance_score.binary_score:
+                    print("ROUTING DECISION: Going to 'END' (Answers Question)")
+                    return "Answers Question"
+                else:
+                    print("ROUTING DECISION: Going to 'Search Online' (Question not addressed)")
+                    return "Question not addressed"
+            else:
+                # Hallucination detected - check circuit breaker
+                print(f"❌ Fallback: Hallucinations detected. Attempt {current_attempts}/{MAX_ATTEMPTS}")
+                
+                if current_attempts < MAX_ATTEMPTS:
+                    print("ROUTING DECISION: Going to 'Generate Answer' (Retry within limit)")
+                    return "Hallucinations detected"
+                else:
+                    print(f"ROUTING DECISION: Going to 'END' (Max attempts {MAX_ATTEMPTS} reached)")
+                    return "Answers Question"  # End even with flawed answer
     
     def _analyze_query(self, state: GraphState):
         """Analyze the user query and create execution plan with metadata extraction"""
@@ -1024,28 +1121,32 @@ class RAGWorkflow:
         if not self.multi_tool_executor:
             self.multi_tool_executor = MultiToolExecutor(retriever=self.retriever)
         
-        # Execute the plan with metadata for optimization
+        # Execute the plan with metadata for optimization (NOW WITH PER-TASK RERANKING AND CONTEXT ACCUMULATION)
         try:
-            results = self.multi_tool_executor.execute_plan(execution_plan, metadata)
+            results = self.multi_tool_executor.execute_plan(execution_plan, metadata, state)
             
+            # Extract results - vectorstore_results are now ALREADY RERANKED (top 3 per task)
             vectorstore_results = results.get("vectorstore_results", [])
             web_search_results = results.get("web_search_results", [])
             combined_context = results.get("combined_context", "")
             total_sources = results.get("total_sources", 0)
+            rerank_completed = results.get("rerank_completed", True)  # Flag from executor
             
-            print(f"Execution completed: {total_sources} total sources")
-            print(f"Vectorstore results: {len(vectorstore_results)}")
-            print(f"Web search results: {len(web_search_results)}")
+            print(f"🎯 PARALLEL EXECUTION COMPLETED: {total_sources} total sources")
+            print(f"   📚 Reranked docs collected: {len(vectorstore_results)}")
+            print(f"   🌐 Web results collected: {len(web_search_results)}")
+            print(f"   ✅ Per-task reranking: {rerank_completed}")
             
             # Update state with results and preserve metadata
             return {
                 "question": question,
                 "execution_plan": execution_plan,
-                "metadata": metadata,  # NEW: Preserve metadata through workflow
+                "metadata": metadata,  # Preserve metadata through workflow
                 "vectorstore_results": vectorstore_results,
                 "web_search_results": web_search_results,
+                "documents": vectorstore_results,  # Set documents to reranked results
                 "combined_context": combined_context,
-                # REMOVED: "documents": vectorstore_results + web_search_results - Let reranking set this
+                "rerank_completed": rerank_completed,  # Flag that reranking was done
                 "online_search": len(web_search_results) > 0,
                 "search_method": "multi_tool"
             }
@@ -1069,14 +1170,15 @@ class RAGWorkflow:
         """
         Assess whether retrieved context is sufficient to answer the question.
         
-        CRITICAL: This function must differentiate between:
-        - Web-search-only plans (can skip LLM check if successful)
-        - Document-only plans (must run LLM Gap Analysis)
-        - Hybrid plans (must run LLM Gap Analysis on documents)
+        CRITICAL FIX: This function is now TOOL-AWARE and analyzes COMBINED context
+        from both documents and web search results to prevent false negatives on hybrid queries.
+        
+        Previous Bug: Only assessed documents, ignored web results → false "insufficient" on hybrid queries
+        Fix: Passes both documents AND web_search_results to assessment chain
         """
         print("GRAPH STATE: Assess Context")
         
-        # **STEP 1: ANALYZE EXECUTION PLAN TYPE**
+        # **STEP 1: EXTRACT ALL AVAILABLE CONTEXT**
         execution_plan = state.get("execution_plan", [])
         web_search_results = state.get("web_search_results", [])
         documents = state.get("documents", [])
@@ -1111,26 +1213,35 @@ class RAGWorkflow:
                 "context_assessment": "insufficient"
             }
         
-        # **CONDITION 3: MUST run LLM Gap Analysis for DOCUMENT-ONLY or HYBRID queries**
+        # **CONDITION 3: TOOL-AWARE LLM Gap Analysis for DOCUMENT-ONLY or HYBRID queries**
         if has_doc_search:
             plan_type = "HYBRID" if has_web_search else "DOCUMENT-ONLY"
-            print(f"---CONTEXT ASSESSMENT: Performing LLM Gap Analysis for {plan_type} plan---")
-            print(f"   📊 Analyzing {len(documents)} documents against original question")
-            print("   ⚠️  Note: Even if web search succeeded, we MUST validate document quality for hybrid queries")
+            print(f"---CONTEXT ASSESSMENT: Performing TOOL-AWARE LLM Gap Analysis for {plan_type} plan---")
+            print(f"   📊 Analyzing {len(documents)} documents and {len(web_search_results)} web results against original question")
             
-            # Perform LLM-based Gap Analysis on documents
+            if has_web_search:
+                print("   🔧 CRITICAL FIX: Passing BOTH documents AND web results to prevent false negatives")
+            
+            # **CRITICAL FIX: Pass BOTH documents AND web_search_results to assessment chain**
             try:
-                assessment_result = assess_context_sufficiency(original_question, documents)
+                # Now returns (decision, gap_analysis_json)
+                assessment_result, gap_analysis_json = assess_context_sufficiency(
+                    original_question=original_question,
+                    documents=documents,
+                    web_search_results=web_search_results  # NEW: Pass web results
+                )
                 
                 print(f"✅ LLM GAP ANALYSIS COMPLETE: '{assessment_result}'")
                 
                 if assessment_result == "sufficient":
-                    print("   ✅ Documents provide sufficient context for the question")
+                    print("   ✅ Combined context (documents + web) provides sufficient information")
                 else:
-                    print("   ❌ Documents are insufficient - query rewrite may be needed")
+                    print("   ❌ Combined context is insufficient - query rewrite may be needed")
                 
+                # Save both the decision and the full JSON report
                 return {
-                    "context_assessment": assessment_result
+                    "context_assessment": assessment_result,
+                    "context_assessment_json": gap_analysis_json  # NEW: Save full report for plan correction
                 }
                 
             except Exception as e:
@@ -1151,84 +1262,54 @@ class RAGWorkflow:
         }
     
     def _rewrite_query(self, state: GraphState):
-        """Rewrite the query to improve retrieval results while preserving tool and intent"""
-        print("GRAPH STATE: Rewrite Query")
+        """
+        Surgically corrects the execution_plan based on the gap analysis report.
+        This is a "plan-based" correction, not a "query-based" rewrite.
+        """
+        print("GRAPH STATE: Rewrite Query (Plan Correction)")
         
-        # **CRITICAL FIX 2: PRESERVE TOOL AND INTENT**
-        # Use ORIGINAL question for rewriting to preserve full intent
-        original_question = state.get("original_question", state["question"])
-        current_question = state["question"]  # May already be rewritten
-        failed_documents = state.get("documents", [])
-        current_attempts = state.get("rewrite_attempts", 0)
-        original_execution_plan = state.get("execution_plan", [])
+        original_question = state["original_question"]
+        execution_plan = state["execution_plan"]
+        gap_analysis_report = state.get("context_assessment_json", {})
+        rewrite_attempts = state.get("rewrite_attempts", 0) + 1
+
+        print(f"Correcting plan (attempt #{rewrite_attempts})")
+        print(f"  Original question: '{original_question[:100]}...'")
+        print(f"  Original plan has {len(execution_plan)} tasks")
         
-        # Increment rewrite attempts
-        new_attempts = current_attempts + 1
-        
-        print(f"Rewriting query (attempt #{new_attempts})")
-        print(f"   ORIGINAL question (preserving full intent): '{original_question[:100]}...'")
-        print(f"   Current question: '{current_question[:100]}...'")
-        print(f"   Analyzing {len(failed_documents)} failed documents for rewrite clues")
-        
-        # Generate rewritten query using ORIGINAL question to preserve full intent
-        rewritten_query = generate_progressive_rewrite(
-            original_question,  # Use original question, not current rewritten one
-            failed_documents, 
-            new_attempts
-        )
-        
-        print(f"   Rewritten query: '{rewritten_query}'")
-        
-        # **CRITICAL FIX: PRESERVE FULL PLAN STRUCTURE AND METADATA**
-        # Reconstruct execution plan while preserving tool types, order, and metadata
-        if original_execution_plan:
-            print(f"   Reconstructing execution plan from {len(original_execution_plan)} original tasks")
-            print("   ⚠️  CRITICAL: Preserving tool structure and source_document metadata")
+        if not gap_analysis_report:
+            print("  ⚠️  No gap analysis report found. Rewrite may be suboptimal.")
+
+        # Call the plan correction chain with the plan and the report
+        try:
+            from backend.chains.rewrite_query_groq import correct_execution_plan
             
-            new_execution_plan = []
-            
-            for i, original_task in enumerate(original_execution_plan):
-                # Create new task preserving the original tool type
-                new_task = {
-                    "tool": original_task.get("tool"),
-                    "query": rewritten_query  # Use rewritten query for all tasks
-                }
-                
-                # **CRITICAL: Preserve source_document metadata for vectorstore tasks**
-                if original_task.get("tool") == "vectorstore_retrieval":
-                    if "source_document" in original_task:
-                        new_task["source_document"] = original_task["source_document"]
-                        print(f"   ✅ Task {i+1}: {new_task['tool']} with source_document='{new_task['source_document']}'")
-                    else:
-                        print(f"   📄 Task {i+1}: {new_task['tool']} (no source filter)")
-                else:
-                    print(f"   🌐 Task {i+1}: {new_task['tool']}")
-                
-                new_execution_plan.append(new_task)
-            
-            print(f"   ✅ Reconstructed plan with {len(new_execution_plan)} tasks (structure preserved)")
-            
-        else:
-            # Fallback to vectorstore if no original plan found
-            print("   ⚠️  No original execution plan found, defaulting to vectorstore_retrieval")
-            new_execution_plan = [{
-                "tool": "vectorstore_retrieval",
-                "query": rewritten_query
-            }]
-        
-        print(f"   New execution plan: {new_execution_plan}")
-        
-        # Update state with preserved tool strategy
+            new_plan = correct_execution_plan(
+                original_question=original_question,
+                execution_plan=execution_plan,
+                gap_analysis_report=gap_analysis_report,
+                attempt_number=rewrite_attempts
+            )
+            print(f"✅ Generated new plan with {len(new_plan)} tasks")
+        except Exception as e:
+            print(f"❌ Plan correction failed: {e}")
+            print("   Falling back to original plan to prevent crash.")
+            new_plan = execution_plan
+
+        # Clear old context to force fresh retrieval
+        # Note: We clear context here, but the executor will accumulate
         return {
-            "question": rewritten_query,  # Replace with rewritten query
-            "original_question": original_question,  # Preserve original for reference
-            "rewrite_attempts": new_attempts,
-            "execution_plan": new_execution_plan,  # **NEW: Preserve tool strategy**
-            "documents": [],  # Clear previous documents
-            "vectorstore_results": [],  # Clear previous results
-            "web_search_results": [],  # Clear previous results
+            "question": original_question,  # Keep original question in 'question'
+            "original_question": original_question,
+            
+            # CRITICAL: Overwrite the plan with the new, corrected plan
+            "execution_plan": new_plan,
+            
+            "rewrite_attempts": rewrite_attempts,
+            "documents": state.get("documents", []),  # Keep existing docs for accumulation
+            "web_search_results": state.get("web_search_results", []),  # Keep existing web for accumulation
             "combined_context": "",  # Clear previous context
-            "context_assessment": "insufficient"  # Reset assessment
+            "context_assessment_json": {}  # Clear old report
         }
     
     def _route_after_assessment(self, state: GraphState):

@@ -27,7 +27,7 @@ class BatchRelevanceEvaluation(BaseModel):
     
     # Document relevance (answer grounding)
     document_grounding: bool = Field(
-        description="True if the answer is grounded in the provided documents, False if hallucinated"
+        description="True if the answer is grounded in ANY provided context (documents OR web), False if hallucinated"
     )
     document_grounding_score: float = Field(
         default=0.5,
@@ -36,7 +36,15 @@ class BatchRelevanceEvaluation(BaseModel):
         le=1.0,
     )
     document_grounding_explanation: str = Field(
-        description="Explanation of why the answer is or isn't grounded in documents"
+        description="Explanation of why the answer is or isn't grounded in the provided context"
+    )
+    
+    # **NEW: Grounding source tracking**
+    grounding_source: str = Field(
+        description="Which context source(s) support the answer: 'DOCUMENT_ONLY', 'WEB_ONLY', 'HYBRID' (both), or 'NONE' (hallucinated)"
+    )
+    grounding_source_details: str = Field(
+        description="Detailed explanation of which specific claims come from documents vs web search"
     )
     
     # Question relevance (answer quality)
@@ -80,6 +88,13 @@ EVALUATION FRAMEWORK:
    - Only mark as False if the answer introduces claims NOT found in ANY provided context source
    - Only mark as False if the answer directly contradicts the provided context sources
    - Are there any hallucinations or fabricated details not present in ANY context source?
+   
+   **CRITICAL: SOURCE ATTRIBUTION REQUIREMENT**
+   You MUST explicitly identify which context source(s) support the answer:
+   - Analyze each major claim in the answer
+   - Determine if it comes from DOCUMENT CONTEXT, WEB SEARCH CONTEXT, or BOTH
+   - Do NOT rely on your internal knowledge - ONLY validate against the provided context
+   - If the answer contains information you "know" but isn't in the provided context, mark it as hallucinated
 
 2. QUESTION RELEVANCE EVALUATION:
    - Does the answer directly address what the user asked?
@@ -107,9 +122,18 @@ SCORING CRITERIA:
 - 0.3-0.4: Low confidence, significant uncertainty
 - 0.0-0.2: Very uncertain or contradictory evidence
 
+**GROUNDING SOURCE DETERMINATION:**
+You must set the 'grounding_source' field based on your analysis:
+- **DOCUMENT_ONLY**: All major claims in the answer are supported by document context only
+- **WEB_ONLY**: All major claims in the answer are supported by web search context only
+- **HYBRID**: Answer synthesizes claims from BOTH document and web search contexts
+- **NONE**: Answer contains hallucinated claims not found in ANY provided context
+
 EVALUATION INSTRUCTIONS:
 - **CRITICAL**: Recognize that hybrid answers using both document and web context are VALID
 - **CRITICAL**: Do NOT penalize answers for using web search information when web context is provided
+- **CRITICAL**: Do NOT use your internal knowledge - ONLY validate against provided context
+- **CRITICAL**: If you recognize information but it's not in the provided context, it's a hallucination
 - Evaluate both aspects independently but consider their interaction
 - Provide clear explanations for your assessments
 - Be strict about hallucinations (info not in ANY context) but NOT strict about which context source was used
@@ -117,12 +141,15 @@ EVALUATION INSTRUCTIONS:
 - Consider the overall utility of the answer for the user
 
 **EXAMPLES OF VALID GROUNDING:**
-- Answer uses only document context → GROUNDED (True)
-- Answer uses only web search context → GROUNDED (True)
-- Answer synthesizes both document and web context → GROUNDED (True)
-- Answer adds claims not in any provided context → NOT GROUNDED (False)
+- Answer uses only document context → GROUNDED (True), grounding_source: DOCUMENT_ONLY
+- Answer uses only web search context → GROUNDED (True), grounding_source: WEB_ONLY
+- Answer synthesizes both document and web context → GROUNDED (True), grounding_source: HYBRID
+- Answer adds claims not in any provided context → NOT GROUNDED (False), grounding_source: NONE
 
-Be thorough and precise in your dual evaluation, with special attention to hybrid context handling."""
+**CRITICAL WARNING ABOUT KNOWLEDGE LEAKAGE:**
+You may "know" facts about topics (e.g., who won a race, what a concept means). However, you MUST NOT mark an answer as grounded based on your internal knowledge. ONLY validate against the explicitly provided context sections. If information matches your knowledge but isn't in the provided context, it's a hallucination.
+
+Be thorough and precise in your dual evaluation, with special attention to hybrid context handling and accurate source attribution."""
 
 batch_relevance_prompt = ChatPromptTemplate.from_messages(
     [
@@ -263,6 +290,8 @@ def evaluate_relevance_batch(question: str, documents: List, solution: str) -> D
         return {
             "document_relevance_score": document_relevance_score,
             "question_relevance_score": question_relevance_score,
+            "grounding_source": batch_result.grounding_source,  # NEW: Source attribution
+            "grounding_source_details": batch_result.grounding_source_details,  # NEW: Detailed breakdown
             "batch_evaluation": True,  # Flag to indicate this was a batch evaluation
             "overall_quality": batch_result.overall_quality
         }

@@ -52,9 +52,11 @@ class GraphState(TypedDict):
     
     # Query rewriting loop fields
     context_assessment: Optional[str]  # Result of context sufficiency assessment ("sufficient" or "insufficient")
+    context_assessment_json: Optional[Dict[str, Any]]  # Full JSON gap analysis report from assessment
     rerank_completed: Optional[bool]  # Flag to indicate if reranking was successfully completed
     
     # Relevance score caching for API optimization
     cached_document_relevance: Optional[Dict[str, Any]]  # Cached document relevance score
     cached_question_relevance: Optional[Dict[str, Any]]  # Cached question relevance score
+    cached_grounding_source: Optional[str]  # Cached grounding source from batch validation (DOCUMENT_ONLY/WEB_ONLY/HYBRID/NONE)
     cache_context_signature: Optional[str]  # Hash of context used for cache validation
