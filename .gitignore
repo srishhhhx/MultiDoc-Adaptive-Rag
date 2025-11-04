@@ -30,7 +30,9 @@ tests/
 
 venv
 
-md_files/
+
 screenshots/
 results/
-test_suite
+test_suite/
+mdfiles/
+
