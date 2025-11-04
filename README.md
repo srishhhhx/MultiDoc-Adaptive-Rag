@@ -33,38 +33,21 @@ This agent was engineered for production-grade performance and reliability, achi
 | **Self-Correction Success Rate** | **> 75%** | Agent successfully recovers from most initial retrieval failures. |
 | **End-to-End Success Rate** | **> 99%**  | Handles API errors gracefully via fallback mechanisms. |
 
-### Architectural Advancements:
-* **Hybrid LLM Strategy:** Optimized cost and latency by using Gemini 2.5 Flash for complex reasoning (planning, generation) and ultra-fast Groq Llama3-8B for evaluation tasks (assessment, quality checks), achieving a **~35-40% reduction** in evaluation latency compared to Gemini Pro.
+### Architectural Advancements
 
+* **Hybrid LLM Strategy:** Deployed a dual-model setup using **Gemini 2.5 Flash** for reasoning and **Groq Llama3-8B** for evaluations, achieving a **35–40% reduction in latency** while maintaining high output quality.
 
-* **Batch Processing Optimization:** Replaced N+1 sequential API calls with **single-call batch processing** for document evaluation and relevance checking, reducing evaluation overhead by ~N times (where N = number of documents).
+* **Hybrid Search with Reciprocal Rank Fusion:** Combined **FAISS (semantic)** and **BM25 (keyword)** search with **RRF (k=60)** fusion, improving retrieval recall by **5–15%** for both factual and contextual queries.
 
+* **FAISS HNSW Indexing:** Upgraded to **IndexHNSWFlat (M=32, efConstruction=40)** for **3–10x faster search** and logarithmic scaling, enabling real-time retrieval on large corpora.
 
-* **Hybrid Search with Reciprocal Rank Fusion:** Implemented **FAISS + BM25 hybrid search** with **RRF (k=60)** for improved retrieval quality, combining semantic and keyword-based search strategies with 5-15% recall improvement.
+* **Optimized Self-Correction Loop:** Rebuilt the self-correction system with **fast heuristic pre-checks**, **skip-reranking on retries**, and **context deduplication**, delivering a **3–4x speedup** while preserving adaptive RAG accuracy.
 
+* **Parallel Multi-Tool Execution:** Integrated **ThreadPoolExecutor-based concurrency** for document retrieval and web search, significantly reducing latency for hybrid multi-source queries.
 
-* **FAISS HNSW Indexing:** Upgraded from flat index to **IndexHNSWFlat (M=32, efConstruction=40)** for **3-10x faster search** at scale with O(log n) complexity.
+* **Relevance Score Caching:** Introduced **context-signature caching (MD5 hashing)** to reuse prior relevance evaluations, eliminating redundant LLM calls and saving several seconds per retry.
 
-
-* **GPU-Accelerated Reranking:** Leveraged Apple Silicon MPS for a **2-3x speedup** in local cross-encoder reranking with intelligent conditional skipping (threshold: 10 docs) saving 3-7s when not needed.
-
-
-* **Parallel Multi-Tool Execution:** Implemented **ThreadPoolExecutor-based concurrent execution** for document retrieval and web search tasks, reducing latency for hybrid queries.
-
-
-* **Optimized Self-Correction Loop:** Re-engineered the self-correction feature with **fast heuristic pre-checks** (saves 2-3s in 50-60% of cases), **skip-reranking-on-retry** (saves 3-7s per retry), and **context accumulation with deduplication** across retry attempts, making it **3-4x faster** while preserving the core adaptive RAG capability.
-
-
-* **Per-Task Reranking Strategy:** Moved from global reranking to **per-task reranking** (top-3 per task), enabling better multi-topic context balance and reducing computational overhead.
-
-
-* **Metadata-Driven Retrieval:** Eliminated context contamination in multi-document scenarios by implementing **task-specific source document filtering** at the execution plan level, ensuring precise FAISS metadata filtering.
-
-
-* **Relevance Score Caching:** Added **context-signature-based caching (MD5 hashing)** for relevance evaluations, avoiding redundant LLM calls when context hasn't changed between generation attempts.
-
-
-* **Persistent Data Management:** Ensured data integrity and efficient index updates via persistent chunk stores and BM25 index persistence, enabling reliable document addition/deletion without index corruption.
+* **Persistent Data Management:** Implemented **persistent chunk and BM25 index storage**, ensuring reliable document addition/deletion and full recovery without index corruption.
 
 ## 3. Features
 
@@ -199,22 +182,20 @@ Access the application at http://localhost:5173 (or your Vite port).
 ## 8. Challenges Faced & Solutions
 This project navigated complex engineering challenges through iterative debugging and architectural refinement:
 
-- **Problem:** Extreme Initial Latency (>56s) due to N+1 LLM calls for document grading.
-**Solution:** Replaced grading with fast, local GPU-accelerated cross-encoder reranking and batch analysis.
-- **Problem:** Slow Reranker "Cold Starts" & CPU Inference.
-**Solution:** Implemented Singleton pattern for model loading and enabled Apple Silicon GPU (MPS) acceleration.
-- **Problem:** Inability to handle hybrid queries (docs + web). **Solution:** Designed an LLM-powered Query Analysis Router creating dynamic multi-tool plans.
-- **Problem:** Context Contamination in multi-document scenarios. **Solution:** Implemented metadata tagging during ingestion and enforced strict metadata filtering in the FAISS retriever based on the execution plan.
-- **Problem:** Unreliable self-correction loop triggering unnecessarily or using the wrong tool. **Solution:** Made Context Assessment tool-aware (differentiating web vs. doc context) and enhanced Query Rewriter to preserve the original tool choice and full user intent.
-- **Problem:** Failed index rebuilds after document deletion due to lack of chunk persistence. **Solution:** Implemented a persistent chunk store (Pickle files per session) as the source of truth for reliable index rebuilding.
-- **Problem:** High latency in evaluation steps (Context Assessment, Quality Checks). **Solution:** Implemented a Hybrid LLM strategy, offloading evaluation tasks to the significantly faster Groq API (Llama3-8B), reducing evaluation latency by over 35%.
-- **Problem:** Poor user experience due to long answer generation times. **Solution:** Implemented server-sent events (SSE) for streaming responses from the backend to the React frontend.
-- **Problem:** Self-correction loop too slow (20-30s overhead) making the feature unusable. **Solution:** Re-engineered with 3 optimizations: (1) Fast heuristic pre-checks (saves 2-3s in 60% of queries), (2) Skip reranking on retry attempts (saves 3-7s), (3) Context accumulation with deduplication across retries, achieving 3-4x speedup.
-- **Problem:** Semantic search missing keyword-specific queries (IDs, codes, names). **Solution:** Implemented hybrid search combining FAISS semantic search with BM25 keyword search using Reciprocal Rank Fusion (RRF), improving recall by 5-15%.
-- **Problem:** Slow FAISS search with large document collections (O(n) complexity). **Solution:** Migrated from flat index to IndexHNSWFlat (M=32, efConstruction=40) achieving 3-10x faster search with O(log n) complexity.
-- **Problem:** Repetitive LLM calls for unchanged context during answer regeneration. **Solution:** Implemented context-signature-based caching (MD5 hashing) to reuse relevance scores when context hasn't changed.
-- **Problem:** Sequential API calls creating N+1 latency issues. **Solution:** Replaced with batch processing for document evaluation and relevance checking, reducing to single API call per stage.
-- **Problem:** Slower inference with Gemini Pro for query analysis/generation. **Solution:** Migrated to Gemini 2.5 Flash achieving 3-5x faster inference with minimal accuracy trade-off (saves 4-8s per query).
+- **Problem:** Extreme Initial Latency (>56s) due to N+1 LLM calls for document grading.  
+  **Solution:** Replaced grading with fast, local GPU-accelerated cross-encoder reranking and batch analysis, cutting evaluation time drastically.
+
+- **Problem:** Self-correction loop too slow (20–30s overhead) making the feature unusable.  
+  **Solution:** Re-engineered with (1) Fast heuristic pre-checks, (2) Skip reranking on retry attempts, and (3) Context accumulation with deduplication—achieving **3–4x faster adaptive correction**.
+
+- **Problem:** High latency in evaluation steps (Context Assessment, Quality Checks).  
+  **Solution:** Implemented a **Hybrid LLM strategy** using Gemini 2.5 Flash for reasoning and Groq Llama3-8B and Qwen3-32B for evaluations, achieving **~35–40% lower latency**.
+
+- **Problem:** Semantic search missing keyword-specific queries (IDs, codes, names).  
+  **Solution:** Built **Hybrid FAISS + BM25 search** with Reciprocal Rank Fusion (RRF), boosting retrieval recall by **5–15%**.
+
+- **Problem:** Slow FAISS search with large document collections (O(n) complexity).  
+  **Solution:** Migrated to **HNSW indexing (IndexHNSWFlat, M=32, ef=40)** for **3–10x faster retrieval** at O(log n) complexity.
 
 ## 9. Future Improvements
 * Advanced Retrieval Strategies: Explore HyDE or Multi-Query Retrieval to further enhance initial retrieval relevance, potentially reducing the need for query rewriting.
