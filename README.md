@@ -35,15 +35,35 @@ This agent was engineered for production-grade performance and reliability, achi
 
 ### Architectural Advancements:
 * **Hybrid LLM Strategy:** Optimized cost and latency by using Gemini 2.5 Flash for complex reasoning (planning, generation) and ultra-fast Groq Llama3-8B for evaluation tasks (assessment, quality checks), achieving a **~35-40% reduction** in evaluation latency compared to Gemini Pro.
+
+
 * **Batch Processing Optimization:** Replaced N+1 sequential API calls with **single-call batch processing** for document evaluation and relevance checking, reducing evaluation overhead by ~N times (where N = number of documents).
+
+
 * **Hybrid Search with Reciprocal Rank Fusion:** Implemented **FAISS + BM25 hybrid search** with **RRF (k=60)** for improved retrieval quality, combining semantic and keyword-based search strategies with 5-15% recall improvement.
+
+
 * **FAISS HNSW Indexing:** Upgraded from flat index to **IndexHNSWFlat (M=32, efConstruction=40)** for **3-10x faster search** at scale with O(log n) complexity.
+
+
 * **GPU-Accelerated Reranking:** Leveraged Apple Silicon MPS for a **2-3x speedup** in local cross-encoder reranking with intelligent conditional skipping (threshold: 10 docs) saving 3-7s when not needed.
+
+
 * **Parallel Multi-Tool Execution:** Implemented **ThreadPoolExecutor-based concurrent execution** for document retrieval and web search tasks, reducing latency for hybrid queries.
+
+
 * **Optimized Self-Correction Loop:** Re-engineered the self-correction feature with **fast heuristic pre-checks** (saves 2-3s in 50-60% of cases), **skip-reranking-on-retry** (saves 3-7s per retry), and **context accumulation with deduplication** across retry attempts, making it **3-4x faster** while preserving the core adaptive RAG capability.
+
+
 * **Per-Task Reranking Strategy:** Moved from global reranking to **per-task reranking** (top-3 per task), enabling better multi-topic context balance and reducing computational overhead.
+
+
 * **Metadata-Driven Retrieval:** Eliminated context contamination in multi-document scenarios by implementing **task-specific source document filtering** at the execution plan level, ensuring precise FAISS metadata filtering.
+
+
 * **Relevance Score Caching:** Added **context-signature-based caching (MD5 hashing)** for relevance evaluations, avoiding redundant LLM calls when context hasn't changed between generation attempts.
+
+
 * **Persistent Data Management:** Ensured data integrity and efficient index updates via persistent chunk stores and BM25 index persistence, enabling reliable document addition/deletion without index corruption.
 
 ## 3. Features
