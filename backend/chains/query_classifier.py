@@ -14,9 +14,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Initialize the LLM
+# Initialize the LLM (using Flash for better performance)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-pro", google_api_key=os.environ["GOOGLE_API_KEY"], temperature=0.1
+    model="gemini-2.5-flash", google_api_key=os.environ["GOOGLE_API_KEY"], temperature=0.1
 )
 
 # Query classification prompt

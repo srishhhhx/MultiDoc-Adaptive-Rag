@@ -40,9 +40,10 @@ try:
     )
 except Exception as e:
     logger.warning(f"Failed to initialize gemini-2.5-flash: {e}")
+    # Fallback to older Flash model instead of Pro for better performance
     llm = ChatGoogleGenerativeAI(
-        model="gemini-pro", 
-        google_api_key=os.environ["GOOGLE_API_KEY"], 
+        model="gemini-1.5-flash",
+        google_api_key=os.environ["GOOGLE_API_KEY"],
         temperature=0.1
     )
 

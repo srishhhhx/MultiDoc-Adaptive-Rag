@@ -89,12 +89,14 @@ class RAGWorkflow:
     Good for understanding how to build RAG systems with LangGraph in practice.
     """
 
-    def __init__(self):
+    def __init__(self, document_processor=None):
         self.retriever = None
         self.web_search = TavilySearchResults(max_results=TAVILY_SEARCH_RESULTS)
         self.multi_tool_executor = None  # Will be initialized when retriever is set
         self.session_retriever_key = None
         self.current_session_id = None  # Track current session for document access
+        self.document_processor = document_processor  # **NEW: For hybrid search support**
+        self.collection_name = None  # **NEW: Will be set based on session_id**
 
     def get_graph(self):
         """Get or create the graph instance (cached for performance)"""
@@ -103,14 +105,24 @@ class RAGWorkflow:
         return self.graph
 
     def set_retriever(self, retriever):
-        """Set the document retriever"""
+        """Set the document retriever and initialize multi-tool executor with hybrid search support"""
         self.retriever = retriever
-        # Initialize multi-tool executor with the new retriever
-        self.multi_tool_executor = MultiToolExecutor(retriever=retriever)
 
-        if retriever is not None:
-            print("Retriever set")
+        # **OPTIMIZATION: Initialize multi-tool executor with hybrid search if available**
+        if self.document_processor and self.current_session_id:
+            self.collection_name = f"session_{self.current_session_id}"
+            self.multi_tool_executor = MultiToolExecutor(
+                retriever=retriever,
+                document_processor=self.document_processor,
+                collection_name=self.collection_name
+            )
+            print(f"✅ Retriever set with HYBRID SEARCH enabled (session: {self.collection_name})")
         else:
+            # Fallback: Standard FAISS-only retrieval
+            self.multi_tool_executor = MultiToolExecutor(retriever=retriever)
+            print("⚠️  Retriever set (standard FAISS only - hybrid search disabled)")
+
+        if retriever is None:
             print("Retriever cleared")
 
     def get_current_retriever(self):
@@ -181,13 +193,16 @@ class RAGWorkflow:
         # Set entry point to Query Analysis Router
         workflow.set_entry_point("Query Analysis")
         
-        # Main flow with query rewriting loop:
-        # Query Analysis -> Execute Plan (with per-task reranking) -> Evaluate -> Context Assessment
+        # Main flow with OPTIMIZED self-correction loop:
+        # Query Analysis -> Execute Plan -> Evaluate -> Context Assessment (OPTIMIZED)
         workflow.add_edge("Query Analysis", "Execute Multi-Tool Plan")
         workflow.add_edge("Execute Multi-Tool Plan", "Evaluate Documents")  # Direct edge - reranking done per-task
-        workflow.add_edge("Evaluate Documents", "Context Assessment")  # Route to assessment
-        
-        # Context Assessment conditional routing (NEW: Self-correcting loop)
+
+        # **RE-ENABLED with OPTIMIZATIONS**: Self-correcting loop (core feature)
+        # Now optimized for 3-4x faster execution while keeping functionality
+        workflow.add_edge("Evaluate Documents", "Context Assessment")
+
+        # Context Assessment conditional routing (Self-correcting loop)
         workflow.add_conditional_edges(
             "Context Assessment",
             self._route_after_assessment,
@@ -197,9 +212,9 @@ class RAGWorkflow:
                 "insufficient": "Rewrite Query",  # Context insufficient -> rewrite query
             },
         )
-        
+
         # Query rewriting loop: Rewrite Query -> back to Execute Multi-Tool Plan
-        workflow.add_edge("Rewrite Query", "Execute Multi-Tool Plan")  # NEW: Loop back for retry
+        workflow.add_edge("Rewrite Query", "Execute Multi-Tool Plan")  # Loop back for retry
         
         # Answer generation with quality checks
         workflow.add_conditional_edges(

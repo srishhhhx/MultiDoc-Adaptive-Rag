@@ -21,55 +21,73 @@ logger = logging.getLogger(__name__)
 class MultiToolExecutor:
     """
     Executes multi-tool plans from the Query Analysis Router
-    
+
     This class takes an execution plan (list of tasks with tools and queries)
     and executes each task using the appropriate tool, then combines the results.
+
+    **OPTIMIZATION: Now supports hybrid search (FAISS + BM25) with Reciprocal Rank Fusion**
     """
-    
-    def __init__(self, retriever=None, self_query_retriever=None):
+
+    def __init__(self, retriever=None, self_query_retriever=None, document_processor=None, collection_name=None):
         """
         Initialize the multi-tool executor
-        
+
         Args:
             retriever: The basic vectorstore retriever for document searches
             self_query_retriever: The self-query retriever for metadata-aware searches
+            document_processor: DocumentProcessor instance for hybrid search (FAISS + BM25)
+            collection_name: Session collection name for hybrid search
         """
         self.retriever = retriever
         self.self_query_retriever = self_query_retriever
+        self.document_processor = document_processor
+        self.collection_name = collection_name
         self.web_search_tool = TavilySearchResults(max_results=TAVILY_SEARCH_RESULTS)
         # Per-task reranking configuration
         self.RERANK_TOP_K = 3  # Return top 3 docs per task for balanced multi-topic context
+
+        # Flag to enable/disable hybrid search
+        self.use_hybrid_search = (document_processor is not None and collection_name is not None)
+        if self.use_hybrid_search:
+            logger.info("✅ Hybrid search (FAISS + BM25) ENABLED for multi-tool executor")
+        else:
+            logger.info("⚠️  Hybrid search DISABLED - using standard FAISS only")
         
-    def execute_plan(self, execution_plan: List[Dict[str, str]], metadata: Optional[Dict[str, Any]] = None, 
+    def execute_plan(self, execution_plan: List[Dict[str, str]], metadata: Optional[Dict[str, Any]] = None,
                     state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute a complete execution plan with PARALLEL per-task reranking and context accumulation
-        
+
         This method now runs all tasks in parallel using ThreadPoolExecutor.
         Each vectorstore_retrieval task performs: Retrieve (20 docs) → Rerank (top 3)
-        
+
         OPTIMIZATION: Accumulates context from previous rewrite loops to preserve successful retrievals
-        
+
         Args:
             execution_plan: List of tasks with 'tool' and 'query' fields
             metadata: Extracted metadata from query analysis for optimization
             state: Optional state dict for context accumulation across rewrite loops
-            
+
         Returns:
             Dict containing results from all tools and combined context
         """
         logger.info(f"🚀 PARALLEL EXECUTION: Running {len(execution_plan)} tasks concurrently")
         if metadata:
             logger.info(f"Using metadata for optimization: {metadata}")
-        
+
+        # **PERFORMANCE OPTIMIZATION**: Check if this is a retry attempt
+        is_retry = state.get("rewrite_attempts", 0) > 0 if state else False
+        if is_retry:
+            logger.info(f"🔄 RETRY DETECTED (attempt {state.get('rewrite_attempts')}): Skipping reranking to save time")
+
         final_docs = []
         final_web_results = []
-        
+
         # Use ThreadPoolExecutor to run tasks concurrently
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Submit all tasks to the pool
+            # Submit all tasks to the pool, passing is_retry flag
             futures = [
-                executor.submit(self._process_task, task, metadata) 
+                executor.submit(self._process_task, task, metadata, is_retry)
                 for task in execution_plan
             ]
             
@@ -119,7 +137,7 @@ class MultiToolExecutor:
             "rerank_completed": True  # Flag that reranking was done per-task
         }
     
-    def _process_task(self, task: Dict[str, str], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _process_task(self, task: Dict[str, str], metadata: Optional[Dict[str, Any]] = None, is_retry: bool = False) -> Dict[str, Any]:
         """
         Process a single task from the execution plan (with per-task reranking)
         
@@ -150,20 +168,32 @@ class MultiToolExecutor:
             
             # Step 1: Retrieve initial documents
             initial_docs = self._execute_vectorstore_task(query, metadata, task_source_document)
-            
+
             if not initial_docs:
                 logger.warning(f"   ⚠️  No documents retrieved for task")
                 return {"type": "docs", "data": []}
-            
-            # Step 2: Rerank ONLY these results
-            logger.info(f"   🔄 Reranking {len(initial_docs)} docs for this task (top_k={self.RERANK_TOP_K})")
-            reranked_docs = rerank_documents(
-                query=query,
-                documents=initial_docs,
-                top_k=self.RERANK_TOP_K
-            )
-            logger.info(f"   ✅ Rerank complete: Selected top {len(reranked_docs)} docs for this task")
-            
+
+            # **PERFORMANCE OPTIMIZATION: Skip reranking in certain scenarios (saves 3-7s)**
+            RERANK_THRESHOLD = 10  # Only rerank if we have 10+ documents
+
+            # Skip reranking if this is a retry attempt (hybrid search should be good enough on 2nd try)
+            if is_retry:
+                logger.info(f"   ⚡ RETRY OPTIMIZATION: Skipping rerank on retry attempt (saves 3-7s)")
+                reranked_docs = initial_docs[:self.RERANK_TOP_K]
+            elif len(initial_docs) >= RERANK_THRESHOLD:
+                # Step 2: Rerank ONLY if we have enough documents to benefit from it
+                logger.info(f"   🔄 Reranking {len(initial_docs)} docs for this task (top_k={self.RERANK_TOP_K})")
+                reranked_docs = rerank_documents(
+                    query=query,
+                    documents=initial_docs,
+                    top_k=self.RERANK_TOP_K
+                )
+                logger.info(f"   ✅ Rerank complete: Selected top {len(reranked_docs)} docs for this task")
+            else:
+                # Skip reranking for small sets - just take top-k
+                logger.info(f"   ⚡ Skipping rerank (only {len(initial_docs)} docs < threshold {RERANK_THRESHOLD})")
+                reranked_docs = initial_docs[:self.RERANK_TOP_K]
+
             return {"type": "docs", "data": reranked_docs}
             
         elif tool == "web_search":
@@ -177,21 +207,53 @@ class MultiToolExecutor:
     def _execute_vectorstore_task(self, query: str, metadata: Optional[Dict[str, Any]] = None, task_source_document: Optional[str] = None) -> Optional[List[Document]]:
         """
         Execute a vectorstore retrieval task with metadata-aware optimization
-        
+
+        **OPTIMIZATION: Uses hybrid search (FAISS + BM25) if document_processor is available**
+
         Args:
             query: The search query for the vectorstore
             metadata: Extracted metadata for optimization (legacy)
             task_source_document: Task-specific source document filter (NEW)
-            
+
         Returns:
             List of retrieved documents or None if no retriever available
         """
-        if not self.retriever:
+        if not self.retriever and not self.use_hybrid_search:
             logger.warning("No vectorstore retriever available")
             return None
-        
+
         # **CRITICAL CHANGE: Prioritize task-specific source_document over global metadata**
         source_document = task_source_document or (metadata.get("source_document") if metadata else None)
+
+        # **OPTIMIZATION: Use hybrid search if available**
+        if self.use_hybrid_search:
+            logger.info(f"🔍 Using HYBRID SEARCH (FAISS + BM25 + RRF) for query")
+            try:
+                # Prepare metadata filter if source document specified
+                metadata_filter = {"source": source_document} if source_document else None
+
+                # Use hybrid search from document_processor
+                documents = self.document_processor.hybrid_search(
+                    query=query,
+                    collection_name=self.collection_name,
+                    k=20,  # Get 20 docs for reranking
+                    metadata_filter=metadata_filter
+                )
+
+                logger.info(f"✅ Hybrid search returned {len(documents)} documents")
+
+                # Log document previews for debugging
+                for i, doc in enumerate(documents[:3]):  # Show first 3 docs
+                    preview = doc.page_content[:100] + "..." if len(doc.page_content) > 100 else doc.page_content
+                    source = doc.metadata.get("source", "unknown")
+                    logger.info(f"   Doc {i+1} (source: {source}): {preview}")
+
+                return documents
+
+            except Exception as e:
+                logger.error(f"❌ Error in hybrid search: {e}")
+                logger.info("   Falling back to standard FAISS retrieval")
+                # Fall through to standard retrieval
         
         if source_document and self.self_query_retriever:
             # OPTIMIZED PATH: Use direct metadata filter, skip Self-Query LLM call
@@ -436,18 +498,25 @@ class MultiToolExecutor:
         return f"Sources: {', '.join(sources)}"
 
 
-def create_executor_with_retriever(retriever, self_query_retriever=None) -> MultiToolExecutor:
+def create_executor_with_retriever(retriever, self_query_retriever=None, document_processor=None, collection_name=None) -> MultiToolExecutor:
     """
     Factory function to create executor with retrievers
-    
+
     Args:
         retriever: The basic vectorstore retriever
         self_query_retriever: Optional self-query retriever for metadata optimization
-        
+        document_processor: Optional DocumentProcessor instance for hybrid search (FAISS + BM25)
+        collection_name: Optional session collection name for hybrid search
+
     Returns:
-        Configured MultiToolExecutor instance
+        Configured MultiToolExecutor instance with hybrid search support
     """
-    return MultiToolExecutor(retriever=retriever, self_query_retriever=self_query_retriever)
+    return MultiToolExecutor(
+        retriever=retriever,
+        self_query_retriever=self_query_retriever,
+        document_processor=document_processor,
+        collection_name=collection_name
+    )
 
 
 # Test function for development

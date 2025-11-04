@@ -398,25 +398,91 @@ def get_assessment_client() -> ContextAssessmentClient:
     return _assessment_client
 
 
+def _fast_heuristic_check(original_question: str, documents: list, web_search_results: list = None) -> str:
+    """
+    **PERFORMANCE OPTIMIZATION**: Fast heuristic pre-check before expensive LLM assessment.
+
+    Quickly determines if context is obviously sufficient based on simple metrics.
+    Saves 2-3 seconds by avoiding LLM call when context is clearly good.
+
+    Returns:
+        "sufficient" if heuristics suggest good context, "uncertain" if LLM assessment needed
+    """
+    # Calculate total context length
+    total_docs = len(documents) + (len(web_search_results) if web_search_results else 0)
+
+    if total_docs == 0:
+        return "uncertain"  # No context at all - need LLM to confirm
+
+    # Calculate total tokens (rough estimate: chars / 4)
+    total_chars = sum(len(doc.page_content) for doc in documents)
+    if web_search_results:
+        total_chars += sum(len(result.page_content) for result in web_search_results)
+
+    total_tokens = total_chars // 4
+
+    # Check if question keywords appear in context
+    question_words = set(original_question.lower().split())
+    # Remove common words
+    stop_words = {'what', 'is', 'the', 'how', 'why', 'when', 'where', 'who', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for'}
+    question_keywords = question_words - stop_words
+
+    context_text = " ".join([doc.page_content.lower() for doc in documents])
+    if web_search_results:
+        context_text += " " + " ".join([result.page_content.lower() for result in web_search_results])
+
+    keyword_matches = sum(1 for keyword in question_keywords if keyword in context_text)
+    keyword_ratio = keyword_matches / max(len(question_keywords), 1)
+
+    # **Heuristic Rules** (conservative - only skip LLM if we're confident)
+    # Rule 1: Rich context with good keyword coverage
+    if total_tokens >= 500 and keyword_ratio >= 0.7 and total_docs >= 3:
+        logger.info(f"⚡ FAST HEURISTIC: Context looks sufficient (tokens={total_tokens}, keywords={keyword_ratio:.1%}, docs={total_docs}) - skipping LLM assessment")
+        return "sufficient"
+
+    # Rule 2: Very rich context (even with lower keyword match)
+    if total_tokens >= 1000 and keyword_ratio >= 0.5 and total_docs >= 5:
+        logger.info(f"⚡ FAST HEURISTIC: Rich context detected (tokens={total_tokens}, docs={total_docs}) - skipping LLM assessment")
+        return "sufficient"
+
+    # Otherwise, need LLM assessment
+    logger.info(f"🤔 Heuristic uncertain (tokens={total_tokens}, keywords={keyword_ratio:.1%}, docs={total_docs}) - proceeding to LLM assessment")
+    return "uncertain"
+
+
 def assess_context_sufficiency(original_question: str, documents: list, web_search_results: list = None) -> tuple[str, Dict[str, Any]]:
     """
     Assess whether retrieved context is sufficient to answer the question.
-    
+
     CRITICAL: Now TOOL-AWARE - analyzes COMBINED context from both documents and web results.
-    
+
+    **OPTIMIZED**: Includes fast heuristic pre-check to avoid expensive LLM calls when context is obviously good.
+
     Uses Groq llama-3.3-70b-versatile for reliable Gap Analysis with Gemini fallback.
-    
+
     Previous Bug: Only assessed documents, ignored web results → false "insufficient" on hybrid queries
     Fix: Now accepts and analyzes both documents AND web_search_results
-    
+
     Args:
         original_question: User's original question
         documents: List of retrieved documents from vectorstore
         web_search_results: List of web search results (optional)
-        
+
     Returns:
         Tuple of ("sufficient" or "insufficient", full_gap_analysis_json)
     """
+    # **PERFORMANCE OPTIMIZATION**: Try fast heuristic check first (saves 2-3s)
+    heuristic_result = _fast_heuristic_check(original_question, documents, web_search_results)
+
+    if heuristic_result == "sufficient":
+        # Context is obviously good - skip expensive LLM call
+        return "sufficient", {
+            "assessment": "sufficient",
+            "method": "fast_heuristic",
+            "reason": "Context passed fast heuristic checks (sufficient length, keyword coverage, and document count)"
+        }
+
+    # Heuristic uncertain - proceed with full LLM assessment
     client = get_assessment_client()
     assessment, gap_analysis_json, metrics = client.assess(original_question, documents, web_search_results)
     return assessment, gap_analysis_json

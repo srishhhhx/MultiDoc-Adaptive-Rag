@@ -152,9 +152,10 @@ document_processor = SessionAwareDocumentProcessor(document_loader)
 
 class SessionAwareRAGWorkflow(RAGWorkflow):
     """RAG workflow with session management support"""
-    
-    def __init__(self):
-        super().__init__()
+
+    def __init__(self, document_processor=None):
+        # **OPTIMIZATION: Pass document_processor to enable hybrid search (FAISS + BM25)**
+        super().__init__(document_processor=document_processor)
         self.graph = None
     
     def _create_graph(self):
@@ -218,7 +219,8 @@ class SessionAwareRAGWorkflow(RAGWorkflow):
         logger.info(f"Question processed successfully for session {session_id}")
         return result
 
-rag_workflow = SessionAwareRAGWorkflow()
+# **OPTIMIZATION: Initialize RAG workflow with document_processor for hybrid search support**
+rag_workflow = SessionAwareRAGWorkflow(document_processor=document_processor)
 
 # Request/Response models
 class QuestionRequest(BaseModel):
