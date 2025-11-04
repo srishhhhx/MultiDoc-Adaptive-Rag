@@ -2,26 +2,23 @@
 
 ## Table of Contents
 - [Summary](#1-introduction)
-- [Demo Video](#2-demo-video)
-- [Performance & Architecture Highlights](#3-performance--architecture-highlights)
-- [Features](#4-features)
-- [Architecture Diagram](#5-architecture-diagram)
-- [Tech Stack](#6-tech-stack)
-- [Project Structure](#7-project-structure)
-- [Installation](#8-how-to-run-the-app)
-- [Challenges I Faced](#9-challenges-faced--solutions)
-- [Future Improvements](#10-future-improvements)
+- [Performance & Architecture Highlights](#2-performance--architecture-highlights)
+- [Features](#3-features)
+- [Architecture Diagram](#4-architecture-diagram)
+- [Tech Stack](#5-tech-stack)
+- [Project Structure](#6-project-structure)
+- [Installation](#7-how-to-run-the-app)
+- [Challenges I Faced](#8-challenges-faced--solutions)
+- [Future Improvements](#9-future-improvements)
 
 
 ## 1. Introduction
 
 The Advanced Multi-Document Adaptive RAG Agent is a state-of-the-art AI reasoning system designed for complex question answering across diverse information sources. It goes far beyond standard chatbots, offering a full-stack application (React.js, FastAPI) powered by a sophisticated, self-correcting RAG pipeline orchestrated with **LangGraph**. This agent intelligently deconstructs user queries, forms dynamic execution plans, utilizes multiple tools (document retrieval, web search), and synthesizes information from various documents and the web to deliver accurate, fully-grounded, and insightful answers in real-time. It represents a significant leap in RAG capabilities, emphasizing reliability, efficiency, and adaptability.
 
-## 2. Demo Video
 
-**(Placeholder - Insert a compelling screen recording showcasing multi-document Q&A, web search fallback, self-correction, and streaming responses)**
 
-## 3. Performance & Architecture Highlights
+## 2. Performance & Architecture Highlights
 
 This agent was engineered for production-grade performance and reliability, achieving significant improvements through rigorous optimization and advanced architectural patterns.
 
@@ -43,7 +40,7 @@ This agent was engineered for production-grade performance and reliability, achi
 * **Parallel Tool Execution:** Reduced latency for hybrid queries by executing document retrieval and web searches concurrently.
 * **Persistent Data Management:** Ensured data integrity and efficient index updates via a persistent chunk store, enabling reliable document addition/deletion.
 
-## 4. Features
+## 3. Features
 
 ### Core User Features
 
@@ -68,12 +65,12 @@ This agent was engineered for production-grade performance and reliability, achi
     * **Relevance Check:** Ensures the final answer directly addresses the original user question. Uses a fast LLM (Groq).
     * **Answer Regeneration:** Allows for limited retries if an answer fails quality checks.
 
-## 5. Architecture Diagram
+## 4. Architecture Diagram
 
 ![Architecture](./assets/Adp-rag.png)
 
 
-## 6. Tech Stack
+## 5. Tech Stack
 
 * **Frontend:** React.js, TypeScript, Vite, Tailwind CSS, Axios
 * **Backend:** Python 3.11+, FastAPI, Uvicorn
@@ -89,7 +86,7 @@ This agent was engineered for production-grade performance and reliability, achi
     * Web Search: Tavily API
 * **Deployment:** Docker, Nginx (for frontend)
 
-## 7. Project Structure
+## 6. Project Structure
 ```
 AdvLang/
 ├── frontend/                    # React TypeScript Frontend (Vite)
@@ -128,7 +125,7 @@ AdvLang/
 └── .env                         # Environment Variables (API Keys)
 ```
 
-## 8. How to Run the App
+## 7. How to Run the App
 
 ### Prerequisites
 * Python 3.11+
@@ -168,7 +165,7 @@ npm run dev
 ```
 Access the application at http://localhost:5173 (or your Vite port).
 
-## 9. Challenges Faced & Solutions
+## 8. Challenges Faced & Solutions
 This project navigated complex engineering challenges through iterative debugging and architectural refinement:
 
 - **Problem:** Extreme Initial Latency (>56s) due to N+1 LLM calls for document grading. 
@@ -182,7 +179,7 @@ This project navigated complex engineering challenges through iterative debuggin
 - **Problem:** High latency in evaluation steps (Context Assessment, Quality Checks). **Solution:** Implemented a Hybrid LLM strategy, offloading evaluation tasks to the significantly faster Groq API (Llama3-8B), reducing evaluation latency by over 35%.
 - **Problem:** Poor user experience due to long answer generation times. **Solution:** Implemented server-sent events (SSE) for streaming responses from the backend to the React frontend.
 
-## 10. Future Improvements
+## 9. Future Improvements
 * Advanced Retrieval Strategies: Explore HyDE or Multi-Query Retrieval to further enhance initial retrieval relevance, potentially reducing the need for query rewriting.
 * More Specialized Tools: Integrate tools like calculators, code interpreters, or database agents for broader query capabilities.
 * UI/UX Enhancements: Add interactive citation highlighting (linking answer snippets to source chunks) and allow user feedback on answer quality.
