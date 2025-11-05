@@ -36,3 +36,5 @@ results/
 test_suite/
 mdfiles/
 
+.claude/
+
