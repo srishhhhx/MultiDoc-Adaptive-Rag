@@ -7,10 +7,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Standard LLM for non-streaming use
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",  # or "gemini-1.5-pro" if you want the faster/lighter one
+    model="gemini-2.5-flash",
     temperature=0,
     google_api_key=os.environ["GOOGLE_API_KEY"],
+)
+
+# Streaming LLM for real-time token generation
+streaming_llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0,
+    google_api_key=os.environ["GOOGLE_API_KEY"],
+    streaming=True,  # Enable streaming mode
 )
 
 # Custom RAG prompt for better answer generation
@@ -74,4 +83,8 @@ prompt = ChatPromptTemplate.from_messages(
     [("system", system_prompt), ("human", human_prompt)]
 )
 
+# Standard non-streaming chain
 generate_chain = prompt | llm | StrOutputParser()
+
+# Streaming chain for real-time token generation
+generate_stream_chain = prompt | streaming_llm | StrOutputParser()

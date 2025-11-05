@@ -10,11 +10,13 @@ This API provides endpoints for:
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 import os
 import tempfile
 import logging
+import json
 from datetime import datetime
 # import uuid  # Currently unused
 
@@ -41,6 +43,7 @@ app.add_middleware(
     allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite default port
     allow_credentials=True,
     allow_methods=["*"],
+    allow_headers=["*"],  # Allow all headers including Accept: text/event-stream
 )
 
 # Initialize components
@@ -608,6 +611,140 @@ async def ask_question(request: QuestionRequest):
     except Exception as e:
         logger.error(f"Question processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/ask-stream")
+async def ask_question_stream(request: QuestionRequest):
+    """
+    Ask a question with Server-Sent Events (SSE) streaming
+
+    This endpoint streams events in real-time as the RAG workflow progresses:
+    - Stage updates (analyzing, retrieving, generating, validating)
+    - Provisional answer tokens as they're generated
+    - Rewrite events if hallucinations are detected
+    - Final answer with quality metrics
+
+    Frontend should use EventSource to consume these events.
+    """
+    async def event_generator():
+        logger.info("=" * 80)
+        logger.info(f"🚀 EVENT GENERATOR STARTED for session {request.session_id}")
+        logger.info(f"   Question: {request.question[:100]}...")
+        logger.info("=" * 80)
+
+        try:
+            # Validate request
+            if not request.question or not request.question.strip():
+                error_event = {"type": "error", "message": "Question cannot be empty", "recoverable": False}
+                yield {"data": json.dumps(error_event)}
+                return
+
+            if not request.session_id:
+                error_event = {"type": "error", "message": "Session ID is required", "recoverable": False}
+                yield {"data": json.dumps(error_event)}
+                return
+
+            # Check if session exists and has documents
+            session_info = session_manager.get_session_info(request.session_id)
+            if not session_info:
+                error_event = {"type": "error", "message": "Session not found or expired", "recoverable": False}
+                yield {"data": json.dumps(error_event)}
+                return
+
+            if len(session_info['documents']) == 0:
+                error_event = {"type": "error", "message": "No documents uploaded in this session. Please upload documents first.", "recoverable": False}
+                yield {"data": json.dumps(error_event)}
+                return
+
+            # Get retriever for this session
+            retriever = session_manager.get_session_retriever(request.session_id)
+            if not retriever:
+                error_event = {"type": "error", "message": "Session retriever not found. Please re-upload documents.", "recoverable": False}
+                yield {"data": json.dumps(error_event)}
+                return
+
+            # CRITICAL: Set session_id BEFORE retriever (multi_tool_executor depends on it)
+            rag_workflow.set_session_id(request.session_id)
+            rag_workflow.set_retriever(retriever)
+
+            # Test retriever before streaming
+            logger.info(f"Testing retriever for session {request.session_id}")
+            try:
+                test_docs = retriever.invoke("test")
+                logger.info(f"Retriever test successful: {len(test_docs)} documents available")
+            except Exception as e:
+                logger.error(f"Retriever test failed: {e}")
+                error_event = {"type": "error", "message": f"Retriever error: {str(e)}", "recoverable": False}
+                yield {"data": json.dumps(error_event)}
+                return
+
+            # Stream the RAG workflow
+            logger.info(f"Starting streaming workflow for session {request.session_id}")
+            event_count = 0
+            last_event = None  # Track last event for conversation saving
+
+            async for event in rag_workflow.process_question_stream(request.question):
+                event_count += 1
+                event_type = event.get("type", "unknown")
+                logger.info(f"📤 Streaming event #{event_count}: {event_type}")
+
+                # Format event for SSE - yield dict and let EventSourceResponse format it
+                logger.info(f"   Yielding SSE event: {event_type}")
+                logger.info(f"   Event data: {json.dumps(event)[:200]}...")
+                yield {"data": json.dumps(event)}
+
+                # Track last event for conversation saving
+                last_event = event
+
+                # Add conversation to history if this is the final answer
+                if event.get("type") == "final_answer":
+                    # Extract quality metrics from event
+                    grounding_source = event.get("grounding_source", "DOCUMENT_ONLY")
+
+                    logger.info(f"Saving conversation to session {request.session_id}")
+                    session_manager.add_conversation_exchange(
+                        request.session_id,
+                        ConversationExchange(
+                            question=request.question,
+                            answer=event.get("content", ""),
+                            timestamp=datetime.now(),
+                            search_method=grounding_source,
+                            online_search=(grounding_source in ["WEB_ONLY", "HYBRID"]),
+                            document_evaluations=None,  # Not tracked in streaming
+                            question_relevance_score=event.get("question_relevance"),
+                            document_relevance_score=event.get("document_relevance")
+                        )
+                    )
+                    logger.info(f"Conversation saved successfully")
+
+            # Send success end event after stream completes
+            logger.info(f"✅ Stream complete. Total events sent: {event_count}")
+            end_event = {
+                "type": "end",
+                "success": True,
+                "total_events": event_count
+            }
+            yield {"data": json.dumps(end_event)}
+
+        except Exception as e:
+            logger.error(f"Streaming error: {str(e)}")
+            error_event = {
+                "type": "error",
+                "message": f"An error occurred: {str(e)}",
+                "recoverable": False
+            }
+            yield {"data": json.dumps(error_event)}
+
+            end_event = {
+                "type": "end",
+                "success": False
+            }
+            yield {"data": json.dumps(end_event)}
+
+    return EventSourceResponse(
+        event_generator(),
+        ping=15,  # Send ping every 15 seconds to keep connection alive
+        sep="\r\n"  # Explicit separator for better compatibility
+    )
 
 @app.get("/api/supported-formats")
 async def get_supported_formats():

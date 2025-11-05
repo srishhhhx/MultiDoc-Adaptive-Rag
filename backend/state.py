@@ -11,11 +11,12 @@ The state includes:
 - Search method tracking
 - Evaluation scores and metrics
 - Error handling information
+- Streaming event types for real-time updates
 
 This state management approach is essential for LangGraph RAG implementations,
 providing clear data flow and enabling complex workflow orchestration.
 """
-from typing import List, TypedDict, Optional, Dict, Any
+from typing import List, TypedDict, Optional, Dict, Any, Literal
 
 class GraphState(TypedDict):
     """
@@ -60,3 +61,66 @@ class GraphState(TypedDict):
     cached_question_relevance: Optional[Dict[str, Any]]  # Cached question relevance score
     cached_grounding_source: Optional[str]  # Cached grounding source from batch validation (DOCUMENT_ONLY/WEB_ONLY/HYBRID/NONE)
     cache_context_signature: Optional[str]  # Hash of context used for cache validation
+
+
+# ========== STREAMING EVENT TYPES ==========
+# These types define the structure of events sent to the frontend during streaming
+
+class StreamEventBase(TypedDict):
+    """Base class for all streaming events"""
+    type: str
+    timestamp: Optional[float]
+
+
+class ProvisionalTokenEvent(StreamEventBase):
+    """Event for streaming answer tokens as they're generated"""
+    type: Literal["provisional_token"]
+    content: str
+    attempt: int
+
+
+class StageEvent(StreamEventBase):
+    """Event for pipeline stage updates"""
+    type: Literal["stage"]
+    stage: Literal["analyzing", "retrieving", "generating", "validating"]
+    message: str
+
+
+class ValidationSuccessEvent(StreamEventBase):
+    """Event when answer passes quality checks"""
+    type: Literal["validation_success"]
+    message: str
+
+
+class RewriteEvent(StreamEventBase):
+    """Event when hallucination is detected and rewrite is triggered"""
+    type: Literal["rewrite"]
+    reason: str
+    attempt: int
+    max_attempts: int
+
+
+class FinalAnswerEvent(StreamEventBase):
+    """Event containing the final validated answer"""
+    type: Literal["final_answer"]
+    content: str
+    total_attempts: int
+    document_relevance: Optional[Dict[str, Any]]
+    question_relevance: Optional[Dict[str, Any]]
+
+
+class ErrorEvent(StreamEventBase):
+    """Event when an error occurs"""
+    type: Literal["error"]
+    message: str
+    recoverable: bool
+
+
+class EndEvent(StreamEventBase):
+    """Event signaling the end of the stream"""
+    type: Literal["end"]
+    success: bool
+
+
+# Union type for all possible streaming events
+StreamEvent = ProvisionalTokenEvent | StageEvent | ValidationSuccessEvent | RewriteEvent | FinalAnswerEvent | ErrorEvent | EndEvent

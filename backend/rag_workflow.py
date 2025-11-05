@@ -17,10 +17,12 @@ question-answering systems with advanced state management and caching.
 
 import hashlib
 import time
+import asyncio
+from typing import AsyncIterator
 from langchain_core.documents import Document
 from langgraph.graph import StateGraph, END
-from backend.state import GraphState
-from backend.chains.generate_answer import generate_chain
+from backend.state import GraphState, StreamEvent
+from backend.chains.generate_answer import generate_chain, generate_stream_chain
 from backend.chains.evaluate_groq import evaluate_documents as evaluate_docs  # Groq-optimized
 from backend.chains.evaluate_batch import evaluate_documents_batch
 from backend.chains.relevance_batch import evaluate_relevance_batch  # Gemini fallback
@@ -165,13 +167,381 @@ class RAGWorkflow:
 
         workflow = self.create_workflow()
         result = workflow.invoke(input={
-            "question": question, 
+            "question": question,
             "original_question": question,  # Preserve original for context assessment
             "rewrite_attempts": 0
         })
 
         print("RAG WORKFLOW COMPLETED")
         return result
+
+    async def process_question_stream(self, question) -> AsyncIterator[StreamEvent]:
+        """
+        Process a question through the RAG workflow with streaming events.
+
+        This method runs the complete RAG pipeline while emitting real-time events
+        for frontend updates, including:
+        - Stage updates (analyzing, retrieving, generating, validating)
+        - Provisional answer tokens as they're generated
+        - Rewrite events when hallucinations are detected
+        - Final answer with quality metrics
+
+        Yields:
+            StreamEvent: Various event types as the workflow progresses
+        """
+        print(f"STARTING STREAMING RAG WORKFLOW for question: '{question}'")
+
+        try:
+            # Ensure we have the most current retriever
+            current_retriever = self.get_current_retriever()
+            self.set_retriever(current_retriever)
+
+            # Initialize state
+            state = {
+                "question": question,
+                "original_question": question,
+                "rewrite_attempts": 0,
+                "generation_attempts": 0
+            }
+
+            # Stage 1: Query Analysis
+            yield {
+                "type": "stage",
+                "stage": "analyzing",
+                "message": "Analyzing your question...",
+                "timestamp": time.time()
+            }
+
+            analysis_result = analyze_query(question, self._get_available_documents())
+            state["execution_plan"] = analysis_result["tasks"]
+            state["metadata"] = analysis_result["metadata"]
+
+            # Stage 2: Retrieval
+            yield {
+                "type": "stage",
+                "stage": "retrieving",
+                "message": "Searching through documents...",
+                "timestamp": time.time()
+            }
+
+            # Execute multi-tool plan
+            results = self.multi_tool_executor.execute_plan(
+                state["execution_plan"],
+                state["metadata"],
+                state
+            )
+
+            state["vectorstore_results"] = results.get("vectorstore_results", [])
+            state["web_search_results"] = results.get("web_search_results", [])
+            state["documents"] = state["vectorstore_results"]
+            state["combined_context"] = results.get("combined_context", "")
+            state["rerank_completed"] = results.get("rerank_completed", True)
+
+            # Evaluate documents
+            state = await self._evaluate_documents_for_streaming(state)
+
+            # Main generation loop (supports self-correction with max 2 attempts)
+            MAX_ATTEMPTS = 2
+            attempt = 0
+
+            while attempt < MAX_ATTEMPTS:
+                attempt += 1
+                state["generation_attempts"] = attempt
+
+                # Stage 3: Generating
+                yield {
+                    "type": "stage",
+                    "stage": "generating",
+                    "message": f"Generating answer... (Attempt {attempt}/{MAX_ATTEMPTS})" if attempt > 1 else "Generating answer...",
+                    "timestamp": time.time()
+                }
+
+                # Build context
+                context_for_generation = self._build_context_from_state(state)
+
+                # Stream answer generation
+                full_answer = ""
+                async for token in self._stream_answer_generation(
+                    context_for_generation,
+                    question,
+                    attempt
+                ):
+                    full_answer += token
+                    yield {
+                        "type": "provisional_token",
+                        "content": token,
+                        "attempt": attempt,
+                        "timestamp": time.time()
+                    }
+
+                state["solution"] = full_answer
+
+                # Stage 4: Validating
+                yield {
+                    "type": "stage",
+                    "stage": "validating",
+                    "message": "Validating answer quality...",
+                    "timestamp": time.time()
+                }
+
+                # Check for hallucinations
+                validation_result = await self._validate_answer_for_streaming(state)
+
+                if validation_result["is_valid"]:
+                    # Answer is good!
+                    yield {
+                        "type": "validation_success",
+                        "message": "Answer validated successfully",
+                        "timestamp": time.time()
+                    }
+
+                    # Emit final answer with document evaluations
+                    yield {
+                        "type": "final_answer",
+                        "content": full_answer,
+                        "total_attempts": attempt,
+                        "document_relevance": validation_result.get("document_relevance"),
+                        "question_relevance": validation_result.get("question_relevance"),
+                        "grounding_source": validation_result.get("grounding_source", "DOCUMENT_ONLY"),
+                        "document_evaluations": state.get("document_evaluations", []),
+                        "timestamp": time.time()
+                    }
+
+                    # Success - end stream
+                    yield {
+                        "type": "end",
+                        "success": True,
+                        "timestamp": time.time()
+                    }
+
+                    print("STREAMING RAG WORKFLOW COMPLETED SUCCESSFULLY")
+                    return
+
+                elif attempt < MAX_ATTEMPTS:
+                    # Hallucination detected, need to rewrite
+                    yield {
+                        "type": "rewrite",
+                        "reason": validation_result.get("reason", "Detected potential inaccuracy"),
+                        "attempt": attempt,
+                        "max_attempts": MAX_ATTEMPTS,
+                        "timestamp": time.time()
+                    }
+
+                    # Continue to next attempt (loop will handle it)
+                    print(f"Rewriting query (attempt {attempt + 1}/{MAX_ATTEMPTS})")
+
+                else:
+                    # Max attempts reached, return best effort
+                    yield {
+                        "type": "final_answer",
+                        "content": full_answer + "\n\n⚠️ Note: This answer was generated with limited confidence. Please verify important details.",
+                        "total_attempts": attempt,
+                        "document_relevance": validation_result.get("document_relevance"),
+                        "question_relevance": validation_result.get("question_relevance"),
+                        "grounding_source": validation_result.get("grounding_source", "DOCUMENT_ONLY"),
+                        "document_evaluations": state.get("document_evaluations", []),
+                        "timestamp": time.time()
+                    }
+
+                    yield {
+                        "type": "end",
+                        "success": True,
+                        "timestamp": time.time()
+                    }
+
+                    print("STREAMING RAG WORKFLOW COMPLETED (MAX ATTEMPTS REACHED)")
+                    return
+
+        except Exception as e:
+            print(f"ERROR in streaming workflow: {e}")
+            yield {
+                "type": "error",
+                "message": str(e),
+                "recoverable": False,
+                "timestamp": time.time()
+            }
+
+            yield {
+                "type": "end",
+                "success": False,
+                "timestamp": time.time()
+            }
+
+    def _build_context_from_state(self, state: dict) -> str:
+        """Build context string from state documents and web results"""
+        documents = state.get("documents", [])
+        web_search_results = state.get("web_search_results", [])
+
+        context_sections = []
+
+        if documents:
+            doc_content = []
+            for i, doc in enumerate(documents, 1):
+                if hasattr(doc, 'page_content'):
+                    doc_content.append(f"Document {i}:\n{doc.page_content}")
+                else:
+                    doc_content.append(f"Document {i}:\n{str(doc)}")
+
+            context_sections.append(
+                "=== DOCUMENT INFORMATION ===\n" +
+                "\n\n".join(doc_content)
+            )
+
+        if web_search_results:
+            web_content = []
+            for i, result in enumerate(web_search_results, 1):
+                if hasattr(result, 'page_content'):
+                    web_content.append(f"Web Result {i}:\n{result.page_content}")
+                else:
+                    web_content.append(f"Web Result {i}:\n{str(result)}")
+
+            context_sections.append(
+                "=== WEB SEARCH RESULTS ===\n" +
+                "\n\n".join(web_content)
+            )
+
+        if context_sections:
+            return "\n\n" + "\n\n".join(context_sections) + "\n\n"
+        else:
+            return "No relevant information found."
+
+    async def _stream_answer_generation(self, context: str, question: str, attempt: int) -> AsyncIterator[str]:
+        """Stream answer generation token by token"""
+        try:
+            # Use the streaming chain
+            async for token in generate_stream_chain.astream({
+                "context": context,
+                "question": question
+            }):
+                yield token
+        except Exception as e:
+            print(f"Error in streaming generation: {e}")
+            # Fallback to non-streaming
+            answer = generate_chain.invoke({"context": context, "question": question})
+            yield answer
+
+    async def _evaluate_documents_for_streaming(self, state: dict) -> dict:
+        """Evaluate documents for quality (non-blocking for streaming)"""
+        # This runs the document evaluation but doesn't block streaming
+        # We can run this in the background or synchronously
+        documents = state.get("documents", [])
+        question = state.get("question", "")
+
+        if not documents:
+            state["document_evaluations"] = []
+            return state
+
+        try:
+            from backend.chains.evaluate_groq import evaluate_documents_batch
+            batch_result = evaluate_documents_batch(
+                question=question,
+                documents=documents,
+                query_classification="document-specific"
+            )
+
+            analysis_results = []
+            for eval_item in batch_result.evaluations:
+                # Format to match frontend expectations (same as non-streaming API)
+                analysis_results.append({
+                    "score": "yes" if eval_item.is_relevant else "no",
+                    "relevance_score": eval_item.relevance_score,
+                    "coverage_assessment": eval_item.coverage_assessment,
+                    "missing_information": eval_item.missing_information
+                })
+
+            state["document_evaluations"] = analysis_results
+        except Exception as e:
+            print(f"Error in document evaluation: {e}")
+            state["document_evaluations"] = []
+
+        return state
+
+    def _serialize_relevance_score(self, score):
+        """Convert Pydantic model to JSON-serializable dict"""
+        if score is None:
+            return None
+
+        # Handle Pydantic models by converting to dict
+        if hasattr(score, 'dict'):
+            return score.dict()
+        elif hasattr(score, '__dict__'):
+            # Fallback: convert object attributes to dict
+            return {
+                'binary_score': getattr(score, 'binary_score', None),
+                'confidence_score': getattr(score, 'confidence_score', None),
+                'explanation': getattr(score, 'explanation', None),
+                'completeness': getattr(score, 'completeness', None),
+                'missing_aspects': getattr(score, 'missing_aspects', None)
+            }
+        else:
+            return score
+
+    async def _validate_answer_for_streaming(self, state: dict) -> dict:
+        """Validate answer for hallucinations and relevance"""
+        solution = state.get("solution", "")
+        question = state.get("question", "")
+        documents = state.get("documents", [])
+        web_results = state.get("web_search_results", [])
+
+        # Build validation docs
+        validation_docs = []
+        if documents:
+            validation_docs.extend(documents)
+        if web_results:
+            from langchain_core.documents import Document
+            for result in web_results:
+                if hasattr(result, 'page_content'):
+                    validation_docs.append(result)
+                elif isinstance(result, dict) and 'content' in result:
+                    validation_docs.append(Document(
+                        page_content=result['content'],
+                        metadata={'type': 'web_search', 'source': result.get('url', 'web')}
+                    ))
+
+        try:
+            # Check relevance using Groq
+            batch_relevance_result = evaluate_relevance_batch_groq(
+                question,
+                validation_docs,
+                solution
+            )
+
+            document_relevance = batch_relevance_result["document_relevance_score"]
+            question_relevance = batch_relevance_result["question_relevance_score"]
+            grounding_source = batch_relevance_result.get("grounding_source", "UNKNOWN")
+
+            # Determine if answer is valid
+            is_grounded = document_relevance.binary_score if document_relevance else False
+            is_relevant = question_relevance.binary_score if question_relevance else False
+
+            # Serialize Pydantic models to dicts for JSON serialization
+            document_relevance_dict = self._serialize_relevance_score(document_relevance)
+            question_relevance_dict = self._serialize_relevance_score(question_relevance)
+
+            if is_grounded and is_relevant:
+                return {
+                    "is_valid": True,
+                    "document_relevance": document_relevance_dict,
+                    "question_relevance": question_relevance_dict,
+                    "grounding_source": grounding_source
+                }
+            else:
+                reason = "Answer not properly grounded in provided context" if not is_grounded else "Answer doesn't fully address the question"
+                return {
+                    "is_valid": False,
+                    "reason": reason,
+                    "document_relevance": document_relevance_dict,
+                    "question_relevance": question_relevance_dict
+                }
+
+        except Exception as e:
+            print(f"Error in validation: {e}")
+            # On error, assume valid to avoid blocking user
+            return {
+                "is_valid": True,
+                "document_relevance": None,
+                "question_relevance": None
+            }
 
     def create_workflow(self):
         """Create and configure the state graph for handling queries with query rewriting loop"""

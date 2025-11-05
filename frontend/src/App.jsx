@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import FileUploader from './components/FileUploader';
 import QuestionAnswer from './components/QuestionAnswer';
+import StreamingQuestionAnswer from './components/StreamingQuestionAnswer';
 import FileIcon from './components/FileIcon';
 import TypewriterHeading from './components/TypewriterHeading';
 import TypewriterText from './components/TypewriterText';
@@ -10,6 +11,7 @@ function App() {
   const [uploadedDocuments, setUploadedDocuments] = useState([]);
   const [sessionInfo, setSessionInfo] = useState(null);
   const [showSessionSummary, setShowSessionSummary] = useState(false);
+  const [useStreaming, setUseStreaming] = useState(true); // Enable streaming by default
 
   // Debug logging
   console.log("App render - sessionId:", sessionId);
@@ -192,7 +194,16 @@ function App() {
 
             {/* Q&A Interface - Right */}
             <div className="flex-1">
-              <QuestionAnswer sessionId={sessionId} />
+              {/* Conditional Rendering: Streaming or Non-Streaming */}
+              {useStreaming ? (
+                <StreamingQuestionAnswer
+                  sessionId={sessionId}
+                  useStreaming={useStreaming}
+                  setUseStreaming={setUseStreaming}
+                />
+              ) : (
+                <QuestionAnswer sessionId={sessionId} />
+              )}
             </div>
           </div>
         )}
