@@ -25,7 +25,7 @@ This agent was engineered for production-grade performance and reliability, achi
 ### Target Performance Metrics:
 | Metric | Target Value| Notes |
 |---|---|---|
-| **Perceived Latency (TTFT)** | **< 2 seconds**  | Streaming implemented for near-instant response start. |
+| **Perceived Latency (TTFT)** | **< 8 seconds**  | Streaming implemented for near-instant response start. |
 | **Total Latency (P95 Document-Only)** | **< 15 seconds**  | Hybrid LLM & parallel execution drastically cut processing time. |
 | **Total Latency (P95 Hybrid Query)** | **< 25 seconds** | Parallel tool execution minimizes web search overhead. |
 | **Factual Accuracy** | **> 95%** | Validated via automated checks. |

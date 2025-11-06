@@ -62,10 +62,7 @@ const QuestionAnswer = ({ sessionId }) => {
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
             <div className="relative z-10 text-white text-[16px] font-semibold h-full flex items-center justify-center gap-2 tracking-tight" style={{fontFamily: 'Product Sans, sans-serif'}}>
               {loading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Processing...</span>
-                </>
+                <span>Processing...</span>
               ) : (
                 <>
                   <span>Ask Question</span>
@@ -87,11 +84,11 @@ const QuestionAnswer = ({ sessionId }) => {
       </div>
 
       {/* Progress Bar */}
-      <ProgressBar 
-        isVisible={loading} 
+      <ProgressBar
+        isVisible={loading}
         onComplete={() => {
           // Progress bar completion is handled by the actual API response
-        }} 
+        }}
       />
 
       {/* Error Message */}

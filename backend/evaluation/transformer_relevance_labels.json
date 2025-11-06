@@ -1,0 +1,24 @@
+{
+  "What is the main architectural innovation introduced in the Transformer model?": {
+    "relevant_docs": ["chunk_0", "chunk_1", "chunk_2"],
+    "scores": {
+      "chunk_0": 3,
+      "chunk_1": 2,
+      "chunk_2": 1
+    }
+  },
+  "How many layers are used in the base Transformer model for both encoder and decoder?": {
+    "relevant_docs": ["chunk_3", "chunk_4"],
+    "scores": {
+      "chunk_3": 3,
+      "chunk_4": 2
+    }
+  },
+  "What is the model dimension (d_model) in the base Transformer?": {
+    "relevant_docs": ["chunk_3", "chunk_4"],
+    "scores": {
+      "chunk_3": 3,
+      "chunk_4": 2
+    }
+  }
+}

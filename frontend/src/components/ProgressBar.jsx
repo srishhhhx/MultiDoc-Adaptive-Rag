@@ -23,31 +23,28 @@ const ProgressBar = ({ isVisible, onComplete }) => {
     // Simulate the backend processing steps
     const stepDuration = 800; // Duration for each step in ms
     const progressInterval = 50; // Update progress every 50ms
+    const maxProgress = 95; // Don't reach 100% until API completes
 
     let stepIndex = 0;
     let stepProgress = 0;
 
     const progressTimer = setInterval(() => {
       stepProgress += (100 / (stepDuration / progressInterval));
-      
+
       if (stepProgress >= 100) {
         stepProgress = 0;
         stepIndex++;
-        
+
+        // Keep cycling through steps but cap at maxProgress
         if (stepIndex >= steps.length) {
-          clearInterval(progressTimer);
-          setProgress(100);
-          setTimeout(() => {
-            onComplete?.();
-          }, 200);
-          return;
+          stepIndex = steps.length - 1; // Stay on last step
+        } else {
+          setCurrentStep(stepIndex);
         }
-        
-        setCurrentStep(stepIndex);
       }
-      
+
       const totalProgress = ((stepIndex * 100) + stepProgress) / steps.length;
-      setProgress(Math.min(totalProgress, 100));
+      setProgress(Math.min(totalProgress, maxProgress));
     }, progressInterval);
 
     return () => clearInterval(progressTimer);
@@ -91,12 +88,6 @@ const ProgressBar = ({ isVisible, onComplete }) => {
       {/* Current Step */}
       <div className="space-y-4">
         <div className="flex items-center gap-4">
-          {/* Animated spinner */}
-          <div className="relative">
-            <div className="w-8 h-8 border-2 border-[#333] border-t-[#22c55e] rounded-full animate-spin"></div>
-            <div className="absolute inset-0 w-8 h-8 border-2 border-transparent border-t-[#22c55e]/30 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
-          </div>
-          
           {/* Step info */}
           <div className="flex-1">
             <div className="text-white text-lg font-semibold mb-1" style={{fontFamily: 'Product Sans, sans-serif'}}>

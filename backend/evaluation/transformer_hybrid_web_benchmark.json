@@ -1,0 +1,82 @@
+[
+  {
+    "question": "How has the Transformer architecture influenced modern large language models like GPT and BERT?",
+    "ground_truth": "The Transformer architecture forms the foundation of modern LLMs. BERT uses the encoder stack for bidirectional context, while GPT uses the decoder stack for autoregressive generation. Both leverage self-attention and positional encodings from the original Transformer."
+  },
+  {
+    "question": "What are the main differences between Transformer and LSTM architectures?",
+    "ground_truth": "Transformers use self-attention instead of recurrence, enabling parallel processing and better long-range dependencies. LSTMs process sequences sequentially, have O(n) sequential operations vs O(1) for Transformers, and struggle with very long sequences due to vanishing gradients."
+  },
+  {
+    "question": "How do modern variants like GPT-4 and Claude improve upon the original Transformer?",
+    "ground_truth": "Modern models use significantly more layers and parameters, improved positional encodings (like RoPE), better optimization techniques, larger training datasets, and architectural modifications like sparse attention, grouped query attention, and different normalization approaches."
+  },
+  {
+    "question": "What are the practical applications of Transformer models beyond machine translation?",
+    "ground_truth": "Transformers are used in text generation, question answering, summarization, code generation, image generation (like DALL-E), protein folding prediction (AlphaFold), and multimodal tasks combining vision and language."
+  },
+  {
+    "question": "What is the attention is all you need paper's citation count and impact?",
+    "ground_truth": "The paper has over 100,000 citations and is one of the most influential AI papers, revolutionizing NLP and beyond by introducing the Transformer architecture that powers modern LLMs."
+  },
+  {
+    "question": "How do positional encodings in Transformers compare to learned position embeddings used in BERT?",
+    "ground_truth": "The original Transformer uses fixed sinusoidal encodings, while BERT uses learned position embeddings. Modern models also use rotary position embeddings (RoPE) or ALiBi, which can better handle sequences longer than those seen during training."
+  },
+  {
+    "question": "What are the computational and memory challenges of scaling Transformers to very long sequences?",
+    "ground_truth": "Self-attention has O(n^2) complexity in sequence length, making long sequences computationally expensive. Solutions include sparse attention, sliding window attention, flash attention for memory efficiency, and techniques like Longformer and BigBird."
+  },
+  {
+    "question": "How does the Transformer's self-attention mechanism enable better interpretability compared to RNNs?",
+    "ground_truth": "Attention weights can be visualized to show which input tokens the model focuses on for each output, providing insights into the model's reasoning. This is harder with RNNs where information is compressed into hidden states."
+  },
+  {
+    "question": "What are the environmental and energy costs of training large Transformer models?",
+    "ground_truth": "Training large models like GPT-3 can consume thousands of GPU-hours and emit significant CO2. Research focuses on efficient training, smaller models, distillation, and using renewable energy to reduce environmental impact."
+  },
+  {
+    "question": "How do encoder-only, decoder-only, and encoder-decoder Transformers differ in their use cases?",
+    "ground_truth": "Encoder-only (BERT) excels at understanding and classification tasks. Decoder-only (GPT) is best for text generation. Encoder-decoder (T5, BART) works well for seq2seq tasks like translation and summarization."
+  },
+  {
+    "question": "What improvements have been made to attention mechanisms since the original Transformer paper?",
+    "ground_truth": "Improvements include linear attention for efficiency, local attention for long sequences, multi-query and grouped-query attention for faster inference, flash attention for memory efficiency, and variants like Perceiver for cross-modal tasks."
+  },
+  {
+    "question": "How does the Transformer architecture handle different modalities like images and audio?",
+    "ground_truth": "Vision Transformers (ViT) split images into patches and treat them as tokens. Audio transformers use spectrograms or raw waveforms as input. The self-attention mechanism works across modalities with appropriate tokenization and positional encoding."
+  },
+  {
+    "question": "What are the limitations of the multi-head attention mechanism?",
+    "ground_truth": "Limitations include quadratic complexity with sequence length, difficulty handling very long contexts, potential redundancy between heads, and high memory requirements. Solutions include sparse attention, linear attention, and head pruning."
+  },
+  {
+    "question": "How has the training efficiency of Transformers improved since the original paper?",
+    "ground_truth": "Improvements include mixed precision training, gradient checkpointing, better optimizers (like AdamW), learning rate schedules (cosine annealing), data parallelism, model parallelism, and techniques like ZeRO for distributed training."
+  },
+  {
+    "question": "What role does layer normalization play in Transformer stability?",
+    "ground_truth": "Layer normalization stabilizes training by normalizing activations, enabling deeper models and higher learning rates. Modern variants like Pre-LN (normalization before attention) and RMSNorm provide better training stability than the original Post-LN."
+  },
+  {
+    "question": "How do Transformers handle tokenization and vocabulary size trade-offs?",
+    "ground_truth": "Subword tokenization (BPE, WordPiece, SentencePiece) balances vocabulary size and granularity. Larger vocabularies reduce sequence length but increase embedding size. Modern models use 30K-100K tokens, optimizing for both efficiency and coverage."
+  },
+  {
+    "question": "What are the main approaches to making Transformers more parameter-efficient?",
+    "ground_truth": "Approaches include LoRA (low-rank adaptation), adapter layers, prompt tuning, pruning, quantization, knowledge distillation, and sharing parameters across layers. These enable fine-tuning with fewer resources."
+  },
+  {
+    "question": "How does the Transformer's residual connections contribute to training deep networks?",
+    "ground_truth": "Residual connections (skip connections) allow gradients to flow directly through the network, preventing vanishing gradients and enabling training of very deep models (100+ layers). They also provide ensemble-like behavior across network depths."
+  },
+  {
+    "question": "What are the security and safety concerns with deploying large Transformer models?",
+    "ground_truth": "Concerns include generating harmful content, bias amplification from training data, prompt injection attacks, data poisoning, model extraction, privacy leaks from training data, and potential misuse for misinformation or malicious code generation."
+  },
+  {
+    "question": "How do retrieval-augmented generation systems extend Transformer capabilities?",
+    "ground_truth": "RAG systems combine Transformers with external knowledge retrieval, allowing access to updated information, reducing hallucinations, enabling citations, and improving factual accuracy without retraining the model."
+  }
+]

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useStreamingRAG } from '../hooks/useStreamingRAG';
 import StreamingAnswerDisplay from './StreamingAnswerDisplay';
-import StatusIndicator from './StatusIndicator';
 import CircularGauge from './CircularGauge';
 import { CONNECTION_STATES } from '../types/streamEvents';
 
@@ -55,7 +54,7 @@ const StreamingQuestionAnswer = ({ sessionId, useStreaming, setUseStreaming }) =
   };
 
   const isLoading = isStreaming;
-  const showAnswer = provisionalAnswer || finalAnswer;
+  const showAnswer = isStreaming || provisionalAnswer || finalAnswer;
 
   return (
     <div className="w-full max-w-4xl space-y-6">
@@ -112,10 +111,7 @@ const StreamingQuestionAnswer = ({ sessionId, useStreaming, setUseStreaming }) =
                 style={{ fontFamily: 'Product Sans, sans-serif' }}
               >
                 {isLoading ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    <span>Processing...</span>
-                  </>
+                  <span>Processing...</span>
                 ) : (
                   <>
                     <span>Ask Question</span>
@@ -172,9 +168,6 @@ const StreamingQuestionAnswer = ({ sessionId, useStreaming, setUseStreaming }) =
           </div>
         </form>
       </div>
-
-      {/* Status Indicator */}
-      <StatusIndicator currentStage={currentStage} isVisible={isStreaming || currentStage} />
 
       {/* Error Message */}
       {error && (
@@ -484,6 +477,34 @@ const StreamingQuestionAnswer = ({ sessionId, useStreaming, setUseStreaming }) =
             </div>
           </div>
         </div>
+      )}
+
+      {/* Reasoning Details */}
+      {finalAnswer && qualityMetrics && (qualityMetrics.question_relevance?.reasoning || qualityMetrics.document_relevance?.reasoning) && (
+        <details className="pt-6 border-t border-[#1a1a1a] group">
+          <summary className="cursor-pointer text-white text-[15px] font-semibold hover:text-[#22c55e] transition-colors list-none flex items-center gap-2">
+            <span className="text-[#666] group-open:rotate-90 transition-transform">▸</span>
+            Evaluation Reasoning
+          </summary>
+          <div className="mt-4 space-y-6 pl-6">
+            {qualityMetrics.question_relevance?.reasoning && (
+              <div className="pl-4 border-l-2 border-[#333]">
+                <h4 className="text-[#ddd] text-[13px] font-semibold mb-2">Question Relevance</h4>
+                <p className="text-[#aaa] text-[13px] leading-relaxed">
+                  {qualityMetrics.question_relevance.reasoning}
+                </p>
+              </div>
+            )}
+            {qualityMetrics.document_relevance?.reasoning && (
+              <div className="pl-4 border-l-2 border-[#333]">
+                <h4 className="text-[#ddd] text-[13px] font-semibold mb-2">Document Relevance</h4>
+                <p className="text-[#aaa] text-[13px] leading-relaxed">
+                  {qualityMetrics.document_relevance.reasoning}
+                </p>
+              </div>
+            )}
+          </div>
+        </details>
       )}
     </div>
   );

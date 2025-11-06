@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { EVENT_TYPES, STAGES } from '../types/streamEvents';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 /**
  * StreamingAnswerDisplay Component
@@ -72,7 +74,7 @@ const StreamingAnswerDisplay = ({
                 className="text-white text-3xl font-bold tracking-tight"
                 style={{ fontFamily: 'Product Sans, sans-serif' }}
               >
-                {finalAnswer ? 'Response' : 'Generating...'}
+                {finalAnswer ? 'Response' : 'Generating answer'}
               </h2>
             </div>
 
@@ -108,12 +110,16 @@ const StreamingAnswerDisplay = ({
 
           {/* Answer Text */}
           {isRewriting ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="text-center">
-                <div className="w-8 h-8 border-3 border-[#fbbf24]/30 border-t-[#fbbf24] rounded-full animate-spin mx-auto mb-4"></div>
+            <div className="py-8">
+              <div className="text-center mb-6">
                 <p className="text-[#888] text-sm" style={{ fontFamily: 'Product Sans, sans-serif' }}>
                   {currentStage?.message || 'Refining answer...'}
                 </p>
+              </div>
+              {/* Green loading bar - dynamically animated */}
+              <div className="w-full bg-[#1a1a1a] rounded-full h-2 overflow-hidden relative">
+                <div className="absolute inset-0 h-full bg-gradient-to-r from-[#22c55e] to-[#16a34a] rounded-full animate-loading-bar"></div>
+                <div className="absolute inset-0 h-full bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer-slow"></div>
               </div>
             </div>
           ) : displayText ? (
@@ -122,50 +128,88 @@ const StreamingAnswerDisplay = ({
               className={`text-[#d0d0d0] text-[17px] leading-relaxed max-h-[600px] overflow-y-auto custom-scrollbar ${
                 isProvisional ? 'opacity-90' : 'opacity-100'
               }`}
-              style={{ fontFamily: 'Product Sans, sans-serif', whiteSpace: 'pre-wrap' }}
+              style={{ fontFamily: 'Product Sans, sans-serif' }}
             >
-              {displayText.split('\n').map((paragraph, idx) => {
-                // Skip empty lines
-                if (!paragraph.trim()) {
-                  return <div key={idx} className="h-4"></div>;
-                }
-
-                // Check if it's a numbered list item or bullet point
-                const isNumberedList = /^\d+\.\s+/.test(paragraph);
-                const isBulletPoint = /^[•\-\*]\s+/.test(paragraph);
-                const isBoldHeader = /^\*\*.*\*\*/.test(paragraph);
-
-                if (isBoldHeader) {
-                  // Bold header (e.g., **Header:**)
-                  const text = paragraph.replace(/\*\*/g, '');
-                  return (
-                    <div key={idx} className="font-bold text-[#fff] mt-4 mb-2">
-                      {text}
-                    </div>
-                  );
-                } else if (isNumberedList || isBulletPoint) {
-                  // List item with proper indentation
-                  return (
-                    <div key={idx} className="mb-3 pl-4">
-                      {paragraph}
-                    </div>
-                  );
-                } else {
-                  // Regular paragraph
-                  return (
-                    <div key={idx} className="mb-4">
-                      {paragraph}
-                    </div>
-                  );
-                }
-              })}
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  // Paragraphs
+                  p: ({ children }) => (
+                    <div className="mb-4">{children}</div>
+                  ),
+                  // Bold text
+                  strong: ({ children }) => (
+                    <span className="font-bold text-white">{children}</span>
+                  ),
+                  // Italic text
+                  em: ({ children }) => (
+                    <span className="italic text-[#e0e0e0]">{children}</span>
+                  ),
+                  // Unordered lists
+                  ul: ({ children }) => (
+                    <ul className="list-disc pl-6 mb-4 space-y-2">{children}</ul>
+                  ),
+                  // Ordered lists
+                  ol: ({ children }) => (
+                    <ol className="list-decimal pl-6 mb-4 space-y-2">{children}</ol>
+                  ),
+                  // List items
+                  li: ({ children }) => (
+                    <li className="mb-2">{children}</li>
+                  ),
+                  // Headings
+                  h1: ({ children }) => (
+                    <h1 className="text-2xl font-bold text-white mt-6 mb-4">{children}</h1>
+                  ),
+                  h2: ({ children }) => (
+                    <h2 className="text-xl font-bold text-white mt-5 mb-3">{children}</h2>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="text-lg font-bold text-white mt-4 mb-2">{children}</h3>
+                  ),
+                  // Code blocks
+                  code: ({ inline, children }) =>
+                    inline ? (
+                      <code className="bg-[#1a1a1a] text-[#22c55e] px-2 py-1 rounded text-sm font-mono">
+                        {children}
+                      </code>
+                    ) : (
+                      <code className="block bg-[#1a1a1a] text-[#22c55e] p-4 rounded-lg mb-4 font-mono text-sm overflow-x-auto">
+                        {children}
+                      </code>
+                    ),
+                  // Blockquotes
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-4 border-[#6b9fff] pl-4 mb-4 italic text-[#aaa]">
+                      {children}
+                    </blockquote>
+                  ),
+                  // Links
+                  a: ({ href, children }) => (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[#6b9fff] hover:text-[#8bb3ff] underline"
+                    >
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {displayText}
+              </ReactMarkdown>
               {isProvisional && (
                 <span className="inline-block w-2 h-5 bg-[#22c55e] ml-1 animate-blink"></span>
               )}
             </div>
           ) : (
-            <div className="flex items-center justify-center py-12">
-              <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+            <div className="py-8">
+              {/* Green loading bar - dynamically animated */}
+              <div className="w-full bg-[#1a1a1a] rounded-full h-2 overflow-hidden relative">
+                <div className="absolute inset-0 h-full bg-gradient-to-r from-[#22c55e] to-[#16a34a] rounded-full animate-loading-bar"></div>
+                <div className="absolute inset-0 h-full bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer-slow"></div>
+              </div>
             </div>
           )}
         </div>
