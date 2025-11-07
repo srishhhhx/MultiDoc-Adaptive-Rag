@@ -53,14 +53,15 @@ This agent was engineered for production-grade performance and reliability, achi
 
 ### Core User Features
 
-* **Multi-Format Document Upload:** Ingest knowledge from PDF, DOCX, TXT files.
+* **Multi-Format Document Upload:** Ingest knowledge from PDF, DOCX, TXT, CSV, and XLSX files.
 * **Session Management:** Persistent document context and conversation history per user session.
 * **Reliable Document Management:** Add or remove documents with automatic, efficient index rebuilding (FAISS + BM25).
 * **Advanced Hybrid Search:** Dual-mode retrieval combining (1) **FAISS semantic search** for context understanding and (2) **BM25 keyword search** for exact term matching, fused with Reciprocal Rank Fusion (RRF) for optimal results.
 * **Multi-Tool Execution:** Seamlessly blends information from uploaded documents and real-time web search results (via Tavily) based on intelligent query routing.
 * **Complex Query Handling:** Understands and answers multi-part questions requiring information synthesis across sources.
-* **Streaming Responses:** Answers appear token-by-token for a near-instant user experience (TTFT < 2s).
-* **Source Grounding:** Clear indication of whether information comes from documents, web, or hybrid sources.
+* **Streaming Responses with Rich Formatting:** Answers appear token-by-token with full markdown support (bold, italic, lists, code blocks, tables) for enhanced readability.
+* **Real-Time Quality Metrics:** Visual gauges display answer relevance and document grounding scores with detailed per-chunk analysis.
+* **Source Grounding:** Clear indication of whether information comes from documents, web, or hybrid sources with evaluation reasoning.
 
 ### Advanced Pipeline Features
 
@@ -84,7 +85,7 @@ This agent was engineered for production-grade performance and reliability, achi
 
 ## 5. Tech Stack
 
-* **Frontend:** React.js, TypeScript, Vite, Tailwind CSS, Axios
+* **Frontend:** React.js, TypeScript, Vite, Tailwind CSS, Axios, React-Markdown (for rich text formatting)
 * **Backend:** Python 3.11+, FastAPI, Uvicorn
 * **AI Orchestration:** LangGraph
 * **LLMs:**
