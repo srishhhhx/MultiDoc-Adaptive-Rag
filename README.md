@@ -47,6 +47,8 @@ This agent was engineered for production-grade performance and reliability, achi
 
 * **Relevance Score Caching:** Introduced **context-signature caching (MD5 hashing)** to reuse prior relevance evaluations, eliminating redundant LLM calls and saving several seconds per retry.
 
+* **Advanced Few-Shot Prompting:** Employed **structured few-shot examples** across critical chain components (query analysis, context assessment, quality checks) to dramatically improve output consistency and reduce hallucination rates.
+
 * **Persistent Data Management:** Implemented **persistent chunk and BM25 index storage**, ensuring reliable document addition/deletion and full recovery without index corruption.
 
 ## 3. Features
@@ -65,7 +67,7 @@ This agent was engineered for production-grade performance and reliability, achi
 
 ### Advanced Pipeline Features
 
-* **Intelligent Query Analysis Router:** Deconstructs user intent, identifies relevant source documents via metadata, and creates dynamic, multi-tool execution plans.
+* **Intelligent Query Analysis Router:** Deconstructs user intent with **few-shot guided prompts**, identifies relevant source documents via metadata, and creates dynamic, multi-tool execution plans.
 * **Metadata-Aware Multi-Tool Executor:** Executes plans precisely, applying source document filters to the FAISS vector store to prevent context contamination.
 * **Optimized Self-Correcting Retrieval Loop (3-4x Faster):**
     * **Fast Heuristic Pre-Check:** Lightweight token/keyword analysis (saves 2-3s in 50-60% of queries) before expensive LLM assessment.
@@ -73,9 +75,9 @@ This agent was engineered for production-grade performance and reliability, achi
     * **Smart Retry Strategy:** Skips reranking on retry attempts (saves 3-7s), accumulates context across attempts with deduplication.
     * **Targeted Query Rewriting:** If context is insufficient, rewrites the query focusing on *missing information* (informed by Gap Analysis) and retries retrieval (max 2 attempts).
 * **Optimized Reranking:** Fast, GPU-accelerated cross-encoder (BAAI/bge-reranker-base) selects the most relevant context chunks.
-* **Robust Quality Gates:**
-    * **Tool-Aware Hallucination Check:** Validates generated answers against *all* context sources (docs + web), correctly handling hybrid answers. Uses a fast LLM (Groq).
-    * **Relevance Check:** Ensures the final answer directly addresses the original user question. Uses a fast LLM (Groq).
+* **Robust Quality Gates with Few-Shot Validation:**
+    * **Tool-Aware Hallucination Check:** Validates generated answers against *all* context sources (docs + web) using **few-shot examples** to improve accuracy, correctly handling hybrid answers. Uses a fast LLM (Groq).
+    * **Relevance Check:** Ensures the final answer directly addresses the original user question with **structured evaluation prompts**. Uses a fast LLM (Groq).
     * **Answer Regeneration:** Allows for limited retries if an answer fails quality checks.
 
 ## 4. Architecture Diagram
