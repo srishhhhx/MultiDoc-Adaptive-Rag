@@ -17,7 +17,7 @@ const TypewriterFormattedAnswer = ({ text }) => {
       const timeout = setTimeout(() => {
         setDisplayedText((prev) => prev + text[currentIndex]);
         setCurrentIndex((prev) => prev + 1);
-      }, 8); // Typing speed - increased pace
+      }, 5); // Typing speed - faster pace
 
       return () => clearTimeout(timeout);
     } else if (currentIndex === text.length && !isComplete) {

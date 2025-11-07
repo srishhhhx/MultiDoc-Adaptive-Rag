@@ -2,13 +2,14 @@
 
 ## Table of Contents
 - [Summary](#1-introduction)
-- [Performance & Architecture Highlights](#2-performance--architecture-highlights)
-- [Features](#3-features)
-- [Architecture Diagram](#4-architecture-diagram)
-- [Tech Stack](#5-tech-stack)
-- [Project Structure](#6-project-structure)
-- [Installation](#7-how-to-run-the-app)
-- [Challenges I Faced](#8-challenges-faced--solutions)
+- [Demo Video](#2-demo-video)
+- [Performance & Architecture Highlights](#3-performance--architecture-highlights)
+- [Features](#4-features)
+- [Architecture Diagram](#5-architecture-diagram)
+- [Tech Stack](#6-tech-stack)
+- [Project Structure](#7-project-structure)
+- [Installation](#8-how-to-run-the-app)
+- [Challenges I Faced](#9-challenges-faced--solutions)
 - [Future Improvements](#9-future-improvements)
 
 
@@ -16,9 +17,12 @@
 
 The Advanced Multi-Document Adaptive RAG Agent is a state-of-the-art AI reasoning system designed for complex question answering across diverse information sources. It goes far beyond standard chatbots, offering a full-stack application (React.js, FastAPI) powered by a sophisticated, self-correcting RAG pipeline orchestrated with **LangGraph**. This agent intelligently deconstructs user queries, forms dynamic execution plans, utilizes multiple tools (document retrieval, web search), and synthesizes information from various documents and the web to deliver accurate, fully-grounded, and insightful answers in real-time. It represents a significant leap in RAG capabilities, emphasizing reliability, efficiency, and adaptability.
 
-![Architecture](./assets/Website1.png)
+## 2. Demo Video
 
-## 2. Performance & Architecture Highlights
+<!-- Demo video will be added here -->
+[*Demo video placeholder - to be added*](https://github.com/user-attachments/assets/7859d3ee-9384-4286-874b-9c673724d092)
+
+## 3. Performance & Architecture Highlights
 
 This agent was engineered for production-grade performance and reliability, achieving significant improvements through rigorous optimization and advanced architectural patterns.
 
@@ -51,7 +55,7 @@ This agent was engineered for production-grade performance and reliability, achi
 
 * **Persistent Data Management:** Implemented **persistent chunk and BM25 index storage**, ensuring reliable document addition/deletion and full recovery without index corruption.
 
-## 3. Features
+## 4. Features
 
 ### Core User Features
 
@@ -80,12 +84,12 @@ This agent was engineered for production-grade performance and reliability, achi
     * **Relevance Check:** Ensures the final answer directly addresses the original user question with **structured evaluation prompts**. Uses a fast LLM (Groq).
     * **Answer Regeneration:** Allows for limited retries if an answer fails quality checks.
 
-## 4. Architecture Diagram
+## 5. Architecture Diagram
 
 ![Architecture](./assets/Arch.png)
 
 
-## 5. Tech Stack
+## 6. Tech Stack
 
 * **Frontend:** React.js, TypeScript, Vite, Tailwind CSS, Axios, React-Markdown (for rich text formatting)
 * **Backend:** Python 3.11+, FastAPI, Uvicorn
@@ -102,7 +106,7 @@ This agent was engineered for production-grade performance and reliability, achi
     * Web Search: Tavily API
 * **Deployment:** Docker, Nginx (for frontend)
 
-## 6. Project Structure
+## 7. Project Structure
 ```
 AdvLang/
 ├── frontend/                    # React TypeScript Frontend (Vite)
@@ -142,7 +146,7 @@ AdvLang/
 └── .env                         # Environment Variables (API Keys)
 ```
 
-## 7. How to Run the App
+## 8. How to Run the App
 
 ### Prerequisites
 * Python 3.11+
@@ -182,7 +186,7 @@ npm run dev
 ```
 Access the application at http://localhost:5173 (or your Vite port).
 
-## 8. Challenges Faced & Solutions
+## 9. Challenges Faced & Solutions
 This project navigated complex engineering challenges through iterative debugging and architectural refinement:
 
 - **Problem:** Extreme Initial Latency (>56s) due to N+1 LLM calls for document grading.  
@@ -200,7 +204,7 @@ This project navigated complex engineering challenges through iterative debuggin
 - **Problem:** Slow FAISS search with large document collections (O(n) complexity).  
   **Solution:** Migrated to **HNSW indexing (IndexHNSWFlat, M=32, ef=40)** for **3–10x faster retrieval** at O(log n) complexity.
 
-## 9. Future Improvements
+## 10. Future Improvements
 * Advanced Retrieval Strategies: Explore HyDE or Multi-Query Retrieval to further enhance initial retrieval relevance, potentially reducing the need for query rewriting.
 * More Specialized Tools: Integrate tools like calculators, code interpreters, or database agents for broader query capabilities.
 * UI/UX Enhancements: Add interactive citation highlighting (linking answer snippets to source chunks) and allow user feedback on answer quality.
