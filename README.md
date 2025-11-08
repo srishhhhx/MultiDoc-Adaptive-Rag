@@ -19,7 +19,7 @@ A full-stack question-answering system designed to retrieve and synthesize infor
 
 Built with **React.js**, **FastAPI**, and **LangGraph** orchestration, the system implements a hybrid search architecture combining **FAISS HNSW indexing** with **BM25 keyword search** with **RRF**, **cross-encoder reranking**, parallel multi-tool execution, and a dual-LLM strategy.
 
-Key capabilities include adaptive query rewriting with gap analysis, metadata-aware document filtering, tool-aware hallucination detection, and relevance score caching—achieving **<10s P95 latency** for document queries, **>95% factual accuracy**, **<3% hallucination rate**, and **>75% self-correction success**.
+Key capabilities include adaptive query rewriting with gap analysis, metadata-aware document filtering, tool-aware hallucination detection, and relevance score caching—achieving **<12s P95 latency** for document queries, **>95% factual accuracy**, **<3% hallucination rate**, and **>75% self-correction success**.
 
 ## 2. Demo Video
 
