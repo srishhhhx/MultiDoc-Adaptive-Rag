@@ -15,7 +15,7 @@
 
 ## 1. Introduction
 
-The **Advanced Multi-Document Adaptive RAG Agent** is a full-stack question-answering system designed to retrieve and synthesize information from multiple documents and real-time web sources, featuring intelligent query routing, self-correcting retrieval loops, and multi-layered quality validation to ensure factually grounded responses.
+A full-stack question-answering system designed to retrieve and synthesize information from multiple documents and real-time web sources, featuring intelligent query routing, self-correcting retrieval loops, and multi-layered quality validation to ensure factually grounded responses.
 
 Built with **React.js**, **FastAPI**, and **LangGraph** orchestration, the system implements a hybrid search architecture combining **FAISS HNSW indexing** with **BM25 keyword search** (fused via Reciprocal Rank Fusion), **cross-encoder reranking** (BAAI/bge-reranker-base), parallel multi-tool execution, and a dual-LLM strategy using **Gemini 2.5 Flash** for generation and **Groq Llama3-8B** for fast evaluations.
 
