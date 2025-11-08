@@ -9,7 +9,7 @@ const steps = [
   { id: 'generating', label: 'Generating Answer', description: 'Creating comprehensive response from sources' }
 ];
 
-const ProgressBar = ({ isVisible, onComplete }) => {
+const ProgressBar = ({ isVisible, onComplete, isComplete }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [progress, setProgress] = useState(0);
 
@@ -38,17 +38,33 @@ const ProgressBar = ({ isVisible, onComplete }) => {
         // Keep cycling through steps but cap at maxProgress
         if (stepIndex >= steps.length) {
           stepIndex = steps.length - 1; // Stay on last step
+          stepProgress = 100; // Stop incrementing at last step
         } else {
           setCurrentStep(stepIndex);
         }
       }
 
       const totalProgress = ((stepIndex * 100) + stepProgress) / steps.length;
-      setProgress(Math.min(totalProgress, maxProgress));
+      const cappedProgress = Math.min(totalProgress, maxProgress);
+
+      // Stop updating once we reach maxProgress
+      if (cappedProgress >= maxProgress) {
+        setProgress(maxProgress);
+        clearInterval(progressTimer);
+      } else {
+        setProgress(cappedProgress);
+      }
     }, progressInterval);
 
     return () => clearInterval(progressTimer);
   }, [isVisible, onComplete]);
+
+  // Jump to 100% when answer arrives
+  useEffect(() => {
+    if (isComplete && progress >= 95) {
+      setProgress(100);
+    }
+  }, [isComplete, progress]);
 
   if (!isVisible) return null;
 
@@ -90,10 +106,24 @@ const ProgressBar = ({ isVisible, onComplete }) => {
         <div className="flex items-center gap-4">
           {/* Step info */}
           <div className="flex-1">
-            <div className="text-white text-lg font-semibold mb-1" style={{fontFamily: 'Product Sans, sans-serif'}}>
+            <div
+              className={`text-white text-lg font-semibold mb-1 ${
+                currentStep === steps.length - 1 && progress >= 95 && !isComplete
+                  ? 'animate-pulse'
+                  : ''
+              }`}
+              style={{fontFamily: 'Product Sans, sans-serif'}}
+            >
               {steps[currentStep]?.label}
             </div>
-            <div className="text-[#888] text-sm" style={{fontFamily: 'Product Sans, sans-serif'}}>
+            <div
+              className={`text-[#888] text-sm ${
+                currentStep === steps.length - 1 && progress >= 95 && !isComplete
+                  ? 'animate-pulse'
+                  : ''
+              }`}
+              style={{fontFamily: 'Product Sans, sans-serif'}}
+            >
               {steps[currentStep]?.description}
             </div>
           </div>

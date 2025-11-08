@@ -15,11 +15,11 @@
 
 ## 1. Introduction
 
-A full-stack question-answering system designed to retrieve and synthesize information from multiple documents and real-time web sources, featuring intelligent query routing, self-correcting retrieval loops, and multi-layered quality validation to ensure factually grounded responses.
+A full stack question-answering system designed to retrieve and synthesize information from multiple documents and real-time web sources, featuring intelligent query routing, self correcting retrieval loops, and multilayered quality validation to ensure factually grounded responses.
 
 Built with **React.js**, **FastAPI**, and **LangGraph** orchestration, the system implements a hybrid search architecture combining **FAISS HNSW indexing** with **BM25 keyword search** with **RRF**, **cross-encoder reranking**, parallel multi-tool execution, and a dual-LLM strategy.
 
-Key capabilities include adaptive query rewriting with gap analysis, metadata-aware document filtering, tool-aware hallucination detection, and relevance score caching—achieving **<12s P95 latency** for document queries, **>95% factual accuracy**, **<3% hallucination rate**, and **>75% self-correction success**.
+Key capabilities include adaptive query rewriting with gap analysis, metadata-aware document filtering, tool-aware hallucination detection, and relevance score caching.
 
 ## 2. Demo Video
 
@@ -28,7 +28,7 @@ Key capabilities include adaptive query rewriting with gap analysis, metadata-aw
 
 ## 3. Performance & Architecture Highlights
 
-This agent was engineered for production-grade performance and reliability, achieving significant improvements through rigorous optimization and advanced architectural patterns.
+This agent was engineered for performance and reliability, achieving significant improvements through rigorous optimization and advanced architectural patterns.
 
 ### Target Performance Metrics:
 | Metric | Target Value| Notes |

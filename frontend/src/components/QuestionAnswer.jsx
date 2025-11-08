@@ -9,6 +9,7 @@ const QuestionAnswer = ({ sessionId }) => {
   const [loading, setLoading] = useState(false);
   const [answer, setAnswer] = useState(null);
   const [error, setError] = useState(null);
+  const [isComplete, setIsComplete] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -17,6 +18,7 @@ const QuestionAnswer = ({ sessionId }) => {
     setLoading(true);
     setError(null);
     setAnswer(null);
+    setIsComplete(false);
 
     try {
       const response = await axios.post('http://localhost:8000/api/ask', {
@@ -25,9 +27,14 @@ const QuestionAnswer = ({ sessionId }) => {
       });
 
       setAnswer(response.data);
+      setIsComplete(true);
+
+      // Small delay to show 100% before hiding progress bar
+      setTimeout(() => {
+        setLoading(false);
+      }, 500);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Failed to get answer');
-    } finally {
       setLoading(false);
     }
   };
@@ -86,6 +93,7 @@ const QuestionAnswer = ({ sessionId }) => {
       {/* Progress Bar */}
       <ProgressBar
         isVisible={loading}
+        isComplete={isComplete}
         onComplete={() => {
           // Progress bar completion is handled by the actual API response
         }}
