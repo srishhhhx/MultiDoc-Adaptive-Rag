@@ -90,7 +90,7 @@ This agent was engineered for performance and reliability, achieving significant
 
 ## 5. Architecture Diagram
 
-![Architecture](./assets/Rag_Architecture.png)
+![Architecture](./assets/Rag_Architecture.jpg)
 
 
 ## 6. Tech Stack
