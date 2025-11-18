@@ -4,13 +4,13 @@
 - [Summary](#1-introduction)
 - [Demo Video](#2-demo-video)
 - [Performance & Architecture Highlights](#3-performance--architecture-highlights)
-- [Features](#4-features)
-- [Architecture Diagram](#5-architecture-diagram)
+- [Architecture Diagram](#4-architecture-diagram)
+- [Features](#5-features)
 - [Tech Stack](#6-tech-stack)
 - [Project Structure](#7-project-structure)
 - [Installation](#8-how-to-run-the-app)
 - [Challenges I Faced](#9-challenges-faced--solutions)
-- [Future Improvements](#9-future-improvements)
+- [Future Improvements](#10-future-improvements)
 
 
 ## 1. Introduction
@@ -59,7 +59,12 @@ This agent was engineered for performance and reliability, achieving significant
 
 * **Persistent Data Management:** Implemented **persistent chunk and BM25 index storage**, ensuring reliable document addition/deletion and full recovery without index corruption.
 
-## 4. Features
+## 4. Architecture Diagram
+
+![Architecture](./assets/Rag_Architecture.jpg)
+
+
+## 5. Features
 
 ### Core User Features
 
