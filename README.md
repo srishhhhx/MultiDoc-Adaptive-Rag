@@ -93,10 +93,6 @@ This agent was engineered for performance and reliability, achieving significant
     * **Relevance Check:** Ensures the final answer directly addresses the original user question with **structured evaluation prompts**. Uses a fast LLM (Groq).
     * **Answer Regeneration:** Allows for limited retries if an answer fails quality checks.
 
-## 5. Architecture Diagram
-
-![Architecture](./assets/Rag_Architecture.jpg)
-
 
 ## 6. Tech Stack
 
