@@ -31,7 +31,7 @@ Key capabilities include adaptive query rewriting with gap analysis, metadata-aw
 This agent was engineered for performance and reliability, achieving significant improvements through rigorous optimization and advanced architectural patterns.
 
 ### Performance Metrics:
-*Validated through comprehensive evaluation framework with 27 metrics across answer quality, retrieval performance, and system intelligence.*
+*Validated through comprehensive evaluation framework with 10 metrics across answer quality, retrieval performance, and system intelligence.*
 
 | Metric | Value | What It Measures |
 |---|---|---|
