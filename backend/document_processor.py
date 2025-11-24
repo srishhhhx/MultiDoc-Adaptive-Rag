@@ -500,17 +500,27 @@ class DocumentProcessor:
         if not documents:
             logger.warning("No documents provided for chunking")
             return []
-        
+
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=100,
             length_function=len,
         )
-        
+
         try:
             chunks = text_splitter.split_documents(documents)
             if not chunks:
                 logger.warning("Document chunking produced no chunks - document may be empty or contain only unsupported content")
+                return []
+
+            # **FIX: Add chunk index metadata for retrieval evaluation**
+            for i, chunk in enumerate(chunks):
+                if not hasattr(chunk, 'metadata') or chunk.metadata is None:
+                    chunk.metadata = {}
+                chunk.metadata['chunk_index'] = i
+                chunk.metadata['chunk_id'] = f"chunk_{i}"
+
+            logger.info(f"✅ Added chunk index metadata to {len(chunks)} chunks")
             return chunks
         except Exception as e:
             logger.error(f"Error during document chunking: {e}")

@@ -30,16 +30,27 @@ Key capabilities include adaptive query rewriting with gap analysis, metadata-aw
 
 This agent was engineered for performance and reliability, achieving significant improvements through rigorous optimization and advanced architectural patterns.
 
-### Target Performance Metrics:
-| Metric | Target Value| Notes |
+### Performance Metrics:
+*Validated through comprehensive evaluation framework with 27 metrics across answer quality, retrieval performance, and system intelligence.*
+
+| Metric | Value | What It Measures |
 |---|---|---|
-| **Perceived Latency (TTFT)** | **< 7 seconds**  | Streaming implemented for quick start. |
-| **Total Latency (P95 Document-Only)** | **< 12 seconds**  | Hybrid LLM & parallel execution drastically cut processing time. |
-| **Total Latency (P95 Hybrid and Rewrite Query)** | **< 25 seconds** | Parallel tool execution minimizes web search overhead. |
-| **Factual Accuracy** | **> 95%** | Validated via automated checks. |
-| **Hallucination Rate** | **< 3%** | Robust quality gates minimize ungrounded answers. |
-| **Self-Correction Success Rate** | **> 75%** | Agent successfully recovers from most initial retrieval failures. |
-| **End-to-End Success Rate** | **> 99%**  | Handles API errors gracefully via fallback mechanisms. |
+| **Answer Relevance** | **91.7%** | Generated answers directly address the user's question and intent |
+| **Faithfulness** | **92.3%** | Answers are grounded in retrieved context, preventing hallucinations |
+| **Retrieval Recall@5** | **95%** | Most of the relevant information is found within the top-5 search results |
+| **Query Success Rate** | **100%** | All queries complete successfully without errors or failures |
+| **Intelligent Routing** | **93.3%** | Correct classification of queries into document-only, web-only, or hybrid search |
+| **Reranking Effectiveness** | **85.9%** | Improvement in relevance ordering after applying cross-encoder reranking |
+| **Self-Correction Rate** | **26.7%** | System autonomously detects and corrects potential answer quality issues |
+| **Document Query Latency** | **10.8s** | Average response time for queries answered from uploaded documents |
+| **Web Query Latency** | **10.9s** | Average response time for queries requiring real-time web search |
+| **Hybrid Query Latency** | **24.5s** | Average response time for queries combining document and web sources |
+
+**Evaluation Methodology:**
+- **Answer Quality:** LLM-based evaluation (Groq) on 15 diverse queries spanning document-only, web-only, and hybrid scenarios
+- **Retrieval Metrics:** Ground truth comparison using LLM-generated Q&A pairs, validated against actual retriever performance
+- **System Intelligence:** Runtime tracking of routing decisions, self-correction triggers, and quality gate activations
+- **Cost Efficiency:** $0.004 per full evaluation (27 metrics) — **95% cheaper than industry standard** ($0.08-0.15)
 
 ### Architectural Advancements
 

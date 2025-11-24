@@ -43,3 +43,5 @@ evaluation_results/
 CLAUDE.md
 
 backend/evaluation
+logs/
+

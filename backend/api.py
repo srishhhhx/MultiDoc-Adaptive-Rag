@@ -25,6 +25,7 @@ from backend.document_loader import MultiModalDocumentLoader
 from backend.document_processor import DocumentProcessor
 from backend.rag_workflow import RAGWorkflow
 from backend.session_manager import session_manager, ConversationExchange
+from backend.evaluation.runtime_metrics_tracker import RuntimeMetricsTracker
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -225,6 +226,10 @@ class SessionAwareRAGWorkflow(RAGWorkflow):
 # **OPTIMIZATION: Initialize RAG workflow with document_processor for hybrid search support**
 rag_workflow = SessionAwareRAGWorkflow(document_processor=document_processor)
 
+# Initialize global metrics tracker for Phase 1
+metrics_tracker = RuntimeMetricsTracker()
+logger.info("✅ RuntimeMetricsTracker initialized for Phase 1 metrics collection")
+
 # Request/Response models
 class QuestionRequest(BaseModel):
     question: str
@@ -331,7 +336,7 @@ async def health_check():
 @app.post("/api/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    session_id: Optional[str] = None
+    session_id: Optional[str] = Form(None)
 ):
     """
     Upload and process a document for a session
@@ -551,10 +556,29 @@ async def ask_question(request: QuestionRequest):
                 status_code=400,
                 detail="No documents uploaded in this session. Please upload documents first."
             )
-        
+
+        # PHASE 1: Track metrics - start timing
+        import time
+        start_time = time.time()
+
         # Process the question for session
         result = rag_workflow.process_question_for_session(request.question, request.session_id)
-        
+
+        # PHASE 1: Extract and log metrics from final state
+        try:
+            query_metrics = metrics_tracker.extract_from_state(
+                state=result,
+                session_id=request.session_id,
+                start_time=start_time
+            )
+            logger.info(f"📊 Metrics collected for query: {request.question[:50]}...")
+            logger.info(f"   Query Type: {query_metrics.query_type}")
+            logger.info(f"   Latency: {query_metrics.latency_ms:.0f}ms")
+            logger.info(f"   Answer Relevance: {query_metrics.answer_relevance}")
+            logger.info(f"   Faithfulness: {query_metrics.faithfulness}")
+        except Exception as e:
+            logger.warning(f"Failed to collect metrics: {e}")
+
         # Format response
         response = {
             "answer": result.get('solution', 'No answer generated'),
@@ -870,6 +894,413 @@ async def nuclear_reset():
     except Exception as e:
         logger.error(f"Error in nuclear reset: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ======================
+# PHASE 1: METRICS ENDPOINTS
+# ======================
+
+@app.get("/api/metrics/summary")
+async def get_metrics_summary():
+    """
+    Get human-readable summary of all collected metrics
+    """
+    try:
+        summary = metrics_tracker.get_metrics_summary()
+        return {"summary": summary, "success": True}
+    except Exception as e:
+        logger.error(f"Error getting metrics summary: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/metrics/aggregated")
+async def get_aggregated_metrics():
+    """
+    Get aggregated metrics across all queries as structured JSON
+    """
+    try:
+        from dataclasses import asdict
+        agg_metrics = metrics_tracker.get_aggregated_metrics()
+        return asdict(agg_metrics)
+    except Exception as e:
+        logger.error(f"Error getting aggregated metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/metrics/session/{session_id}")
+async def get_session_metrics(session_id: str):
+    """
+    Get metrics for a specific session
+    """
+    try:
+        from dataclasses import asdict
+        session_metrics = metrics_tracker.get_session_metrics(session_id)
+        if session_metrics is None:
+            raise HTTPException(status_code=404, detail=f"No metrics found for session {session_id}")
+        return asdict(session_metrics)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting session metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/metrics/sessions")
+async def get_all_session_metrics():
+    """
+    Get metrics for all sessions
+    """
+    try:
+        from dataclasses import asdict
+        session_ids = metrics_tracker.get_all_session_ids()
+
+        sessions_data = {}
+        for session_id in session_ids:
+            session_metrics = metrics_tracker.get_session_metrics(session_id)
+            if session_metrics:
+                sessions_data[session_id] = asdict(session_metrics)
+
+        return {
+            "sessions": sessions_data,
+            "overall": asdict(metrics_tracker.get_aggregated_metrics())
+        }
+    except Exception as e:
+        logger.error(f"Error getting all session metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/metrics/queries")
+async def get_all_query_metrics():
+    """
+    Get detailed metrics for all individual queries
+    """
+    try:
+        from dataclasses import asdict
+        queries = [asdict(m) for m in metrics_tracker.query_metrics]
+        return {
+            "total_queries": len(queries),
+            "queries": queries
+        }
+    except Exception as e:
+        logger.error(f"Error getting query metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/metrics/export")
+async def export_metrics(filepath: Optional[str] = None):
+    """
+    Export all metrics to a JSON file
+    """
+    try:
+        if filepath is None:
+            filepath = f"metrics_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+        metrics_tracker.export_to_json(filepath)
+        return {"success": True, "filepath": filepath}
+    except Exception as e:
+        logger.error(f"Error exporting metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/metrics/clear")
+async def clear_metrics():
+    """
+    Clear all collected metrics (useful for testing)
+    """
+    try:
+        metrics_tracker.clear()
+        return {"success": True, "message": "All metrics cleared"}
+    except Exception as e:
+        logger.error(f"Error clearing metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ======================
+# PHASE 2: EVALUATION ENDPOINTS
+# ======================
+
+@app.post("/api/evaluate/ground-truth/{session_id}")
+async def generate_ground_truth(
+    session_id: str,
+    num_questions: int = 20,
+    document_name: Optional[str] = None
+):
+    """
+    Generate ground truth Q&A pairs for evaluation
+
+    Args:
+        session_id: Session ID
+        num_questions: Number of Q&A pairs to generate (default: 20)
+        document_name: Optional specific document name
+
+    Cost: ~$0.002 per 20 questions (Gemini Flash)
+    """
+    try:
+        from backend.evaluation.ground_truth_generator import GroundTruthGenerator
+        from backend.document_loader import MultiModalDocumentLoader
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+        # Get session info
+        session_info = session_manager.get_session_info(session_id)
+        if not session_info:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        if not session_info['documents']:
+            raise HTTPException(status_code=400, detail="No documents in session")
+
+        # Get document to process (first one if not specified)
+        target_doc = document_name or session_info['documents'][0]['filename']
+
+        # Load and chunk the document
+        # Note: In production, you'd retrieve this from your stored chunks
+        # For now, we'll need to re-process
+        logger.info(f"Generating ground truth for {target_doc} in session {session_id}")
+
+        # This is a simplified version - in production you'd get chunks from storage
+        raise HTTPException(
+            status_code=501,
+            detail="Please use the test script for now. Full integration coming in next update."
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ground truth generation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/evaluate/retrieval/{session_id}")
+async def evaluate_retrieval_metrics(
+    session_id: str,
+    use_ground_truth: bool = True,
+    max_queries: int = 10
+):
+    """
+    Evaluate retrieval metrics (Recall, Precision, MRR, nDCG)
+
+    Args:
+        session_id: Session ID
+        use_ground_truth: Use stored ground truth (if available)
+        max_queries: Maximum number of queries to evaluate
+
+    Returns:
+        Retrieval metrics (Recall@5/10, Precision@5/10, MRR, nDCG@5/10)
+
+    Cost: $0 (uses embeddings only)
+    """
+    try:
+        from backend.evaluation.ground_truth_generator import GroundTruthGenerator
+        from backend.evaluation.retrieval_metrics import RetrievalMetrics
+        from dataclasses import asdict
+
+        # Load ground truth
+        gt_generator = GroundTruthGenerator()
+        ground_truth = gt_generator.load_ground_truth(session_id)
+
+        if not ground_truth:
+            raise HTTPException(
+                status_code=404,
+                detail="No ground truth found. Generate it first using /api/evaluate/ground-truth"
+            )
+
+        # Get retriever
+        retriever = session_manager.get_session_retriever(session_id)
+        if not retriever:
+            raise HTTPException(status_code=404, detail="No retriever found for session")
+
+        # Evaluate
+        evaluator = RetrievalMetrics()
+
+        qa_pairs = ground_truth['qa_pairs'][:max_queries]
+        logger.info(f"Evaluating {len(qa_pairs)} queries for retrieval metrics")
+
+        for idx, qa_pair in enumerate(qa_pairs, 1):
+            # Retrieve documents
+            retrieved_docs = retriever.invoke(qa_pair['question'])
+
+            # Extract chunk IDs from retrieved documents
+            retrieved_ids = []
+            logger.info(f"\n🔍 Query {idx}: {qa_pair['question'][:60]}...")
+            logger.info(f"   Expected chunks: {qa_pair['relevant_chunk_ids']}")
+            logger.info(f"   Retrieved {len(retrieved_docs)} documents:")
+
+            for i, doc in enumerate(retrieved_docs[:10], 1):  # Log top 10
+                chunk_id = doc.metadata.get('chunk_id', f"chunk_{doc.metadata.get('chunk_index', 0)}")
+                retrieved_ids.append(chunk_id)
+                logger.info(f"      #{i}: {chunk_id} | metadata: {doc.metadata}")
+
+            # Get relevant chunk IDs from ground truth
+            relevant_ids = set(qa_pair['relevant_chunk_ids'])
+
+            # Log matching
+            matches = set(retrieved_ids[:10]) & relevant_ids
+            logger.info(f"   ✅ Matched chunks in top-10: {matches if matches else 'NONE'}")
+
+            # Add query result
+            evaluator.add_query_result(
+                retrieved_docs=retrieved_ids,
+                relevant_docs=relevant_ids
+            )
+
+        # Compute results
+        metrics = evaluator.compute_metrics()
+
+        logger.info(f"✅ Retrieval evaluation complete: {metrics.num_queries} queries")
+
+        return {
+            "success": True,
+            "session_id": session_id,
+            "num_queries_evaluated": metrics.num_queries,
+            "metrics": asdict(metrics),
+            "evaluation_time_s": 0,
+            "cost_estimate": "$0.00"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Retrieval evaluation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/evaluate/ragas/{session_id}")
+async def evaluate_ragas_metrics(
+    session_id: str,
+    sample_size: int = 5,
+    enable_all_metrics: bool = True
+):
+    """
+    Run RAGAS evaluation (Context Precision, Context Recall, Faithfulness, Relevancy)
+
+    Args:
+        session_id: Session ID
+        sample_size: Number of queries to sample (default: 5)
+        enable_all_metrics: Enable all RAGAS metrics
+
+    Returns:
+        RAGAS evaluation results
+
+    Cost: ~$0.004 per 5 queries (uses Groq)
+    """
+    try:
+        from backend.evaluation.ground_truth_generator import GroundTruthGenerator
+        from backend.evaluation.enhanced_ragas_evaluator import EnhancedRAGASEvaluator
+        from dataclasses import asdict
+        import random
+
+        # Load ground truth
+        gt_generator = GroundTruthGenerator()
+        ground_truth = gt_generator.load_ground_truth(session_id)
+
+        if not ground_truth:
+            raise HTTPException(
+                status_code=404,
+                detail="No ground truth found. Generate it first using /api/evaluate/ground-truth"
+            )
+
+        # Sample Q&A pairs
+        qa_pairs = random.sample(
+            ground_truth['qa_pairs'],
+            min(sample_size, len(ground_truth['qa_pairs']))
+        )
+
+        logger.info(f"Running RAGAS evaluation on {len(qa_pairs)} queries")
+
+        # Run queries through RAG pipeline
+        questions = []
+        ground_truth_answers = []
+        generated_answers = []
+        contexts_list = []
+
+        for qa_pair in qa_pairs:
+            # Process question
+            result = rag_workflow.process_question_for_session(
+                qa_pair['question'],
+                session_id
+            )
+
+            questions.append(qa_pair['question'])
+            ground_truth_answers.append(qa_pair['answer'])
+            generated_answers.append(result.get('solution', ''))
+
+            # Get contexts
+            docs = result.get('documents', [])
+            contexts = [doc.page_content if hasattr(doc, 'page_content') else str(doc) for doc in docs]
+            contexts_list.append(contexts)
+
+        # Run RAGAS evaluation in thread pool to avoid nested async
+        import asyncio
+
+        def run_ragas_eval():
+            evaluator = EnhancedRAGASEvaluator(
+                use_groq=True,
+                enable_all_metrics=enable_all_metrics
+            )
+            return evaluator.evaluate_batch(
+                questions=questions,
+                answers=generated_answers,
+                contexts_list=contexts_list,
+                ground_truths=ground_truth_answers
+            )
+
+        ragas_result = await asyncio.to_thread(run_ragas_eval)
+
+        logger.info(f"✅ RAGAS evaluation complete")
+
+        return {
+            "success": True,
+            "session_id": session_id,
+            "num_queries": len(questions),
+            "metrics": {
+                "faithfulness": ragas_result.faithfulness,
+                "answer_relevance": ragas_result.answer_relevance,
+                "context_precision": ragas_result.context_precision,
+                "context_recall": ragas_result.context_recall,
+                "context_relevancy": ragas_result.context_relevancy,
+                "answer_correctness": ragas_result.answer_correctness,
+                "answer_similarity": ragas_result.answer_similarity,
+            },
+            "evaluation_time_s": ragas_result.evaluation_time_s,
+            "has_ground_truth": ragas_result.has_ground_truth
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"RAGAS evaluation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/evaluate/complete/{session_id}")
+async def get_complete_evaluation(session_id: str):
+    """
+    Get complete evaluation: Phase 1 (runtime) + Phase 2 (retrieval + RAGAS)
+
+    Returns all available metrics for a session in one call
+    """
+    try:
+        from dataclasses import asdict
+
+        # Phase 1: Runtime metrics
+        phase1_metrics = metrics_tracker.get_session_metrics(session_id)
+
+        # Phase 2: Check if ground truth exists
+        from backend.evaluation.ground_truth_generator import GroundTruthGenerator
+        gt_generator = GroundTruthGenerator()
+        ground_truth = gt_generator.load_ground_truth(session_id)
+
+        response = {
+            "session_id": session_id,
+            "has_ground_truth": ground_truth is not None,
+            "phase1_runtime_metrics": asdict(phase1_metrics) if phase1_metrics else None,
+            "phase2_available": ground_truth is not None
+        }
+
+        if ground_truth:
+            response["ground_truth_info"] = {
+                "num_qa_pairs": ground_truth['num_qa_pairs'],
+                "generated_at": ground_truth['generated_at'],
+                "document_name": ground_truth['document_name']
+            }
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Complete evaluation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
