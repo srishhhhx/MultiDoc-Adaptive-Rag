@@ -60,8 +60,6 @@ This agent was engineered for performance and reliability, achieving significant
 
 * **FAISS HNSW Indexing:** Upgraded to **IndexHNSWFlat (M=32, efConstruction=40)** for **3–10x faster search** and logarithmic scaling, enabling real-time retrieval on large corpora.
 
-* **Optimized Self-Correction Loop:** Rebuilt the self-correction system with **fast heuristic pre-checks**, **skip-reranking on retries**, and **context deduplication**, delivering a **3–4x speedup** while preserving adaptive RAG accuracy.
-
 * **Parallel Multi-Tool Execution:** Integrated **ThreadPoolExecutor-based concurrency** for document retrieval and web search, significantly reducing latency for hybrid multi-source queries.
 
 * **Relevance Score Caching:** Introduced **context-signature caching (MD5 hashing)** to reuse prior relevance evaluations, eliminating redundant LLM calls and saving several seconds per retry.
@@ -94,7 +92,6 @@ This agent was engineered for performance and reliability, achieving significant
 * **Intelligent Query Analysis Router:** Deconstructs user intent with **few-shot guided prompts**, identifies relevant source documents via metadata, and creates dynamic, multi-tool execution plans.
 * **Metadata-Aware Multi-Tool Executor:** Executes plans precisely, applying source document filters to the FAISS vector store to prevent context contamination.
 * **Optimized Self-Correcting Retrieval Loop (3-4x Faster):**
-    * **Fast Heuristic Pre-Check:** Lightweight token/keyword analysis (saves 2-3s in 50-60% of queries) before expensive LLM assessment.
     * **Analytical Context Assessment:** Uses "Gap Analysis" prompt on Groq Llama3-8B to check if retrieved context *logically* covers all parts of the query (only when heuristic is uncertain).
     * **Smart Retry Strategy:** Skips reranking on retry attempts (saves 3-7s), accumulates context across attempts with deduplication.
     * **Targeted Query Rewriting:** If context is insufficient, rewrites the query focusing on *missing information* (informed by Gap Analysis) and retries retrieval (max 2 attempts).

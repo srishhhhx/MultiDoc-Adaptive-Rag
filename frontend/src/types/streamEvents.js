@@ -9,6 +9,7 @@
 export const EVENT_TYPES = {
   PROVISIONAL_TOKEN: 'provisional_token',
   STAGE: 'stage',
+  PROGRESS: 'progress',
   VALIDATION_SUCCESS: 'validation_success',
   REWRITE: 'rewrite',
   FINAL_ANSWER: 'final_answer',
@@ -20,8 +21,22 @@ export const EVENT_TYPES = {
 export const STAGES = {
   ANALYZING: 'analyzing',
   RETRIEVING: 'retrieving',
+  RERANKING: 'reranking',
+  EVALUATING: 'evaluating',
   GENERATING: 'generating',
-  VALIDATING: 'validating'
+  VALIDATING: 'validating',
+  SELF_CORRECTING: 'self_correcting'
+};
+
+// Progress stage constants
+export const PROGRESS_STAGES = {
+  ANALYSIS_COMPLETE: 'analysis_complete',
+  RETRIEVAL_COMPLETE: 'retrieval_complete',
+  RERANKING_COMPLETE: 'reranking_complete',
+  EVALUATION_COMPLETE: 'evaluation_complete',
+  VALIDATION_CHECKING: 'validation_checking',
+  VALIDATION_PASSED: 'validation_passed',
+  VALIDATION_FAILED: 'validation_failed'
 };
 
 // Connection states

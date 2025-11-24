@@ -21,6 +21,7 @@ export function useStreamingRAG(sessionId) {
   // State management
   const [connectionState, setConnectionState] = useState(CONNECTION_STATES.IDLE);
   const [currentStage, setCurrentStage] = useState(null);
+  const [progressInfo, setProgressInfo] = useState(null);
   const [provisionalAnswer, setProvisionalAnswer] = useState('');
   const [finalAnswer, setFinalAnswer] = useState(null);
   const [error, setError] = useState(null);
@@ -166,6 +167,7 @@ export function useStreamingRAG(sessionId) {
 
     setConnectionState(CONNECTION_STATES.IDLE);
     setCurrentStage(null);
+    setProgressInfo(null);
     setProvisionalAnswer('');
     setFinalAnswer(null);
     setError(null);
@@ -208,6 +210,19 @@ export function useStreamingRAG(sessionId) {
           message: parsedData.message
         });
         safeSetState(setConnectionState, CONNECTION_STATES.CONNECTED);
+        break;
+
+      case EVENT_TYPES.PROGRESS:
+        // Store progress information for display
+        safeSetState(setProgressInfo, {
+          stage: parsedData.stage,
+          message: parsedData.message,
+          routing: parsedData.routing,
+          doc_count: parsedData.doc_count,
+          web_count: parsedData.web_count,
+          relevant_count: parsedData.relevant_count,
+          total_count: parsedData.total_count
+        });
         break;
 
       case EVENT_TYPES.PROVISIONAL_TOKEN:
@@ -503,6 +518,7 @@ export function useStreamingRAG(sessionId) {
     // State
     connectionState,
     currentStage,
+    progressInfo,
     provisionalAnswer,
     finalAnswer,
     error,

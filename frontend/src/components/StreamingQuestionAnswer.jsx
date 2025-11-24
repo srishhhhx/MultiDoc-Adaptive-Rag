@@ -23,6 +23,7 @@ const StreamingQuestionAnswer = ({ sessionId, useStreaming, setUseStreaming }) =
   const {
     connectionState,
     currentStage,
+    progressInfo,
     provisionalAnswer,
     finalAnswer,
     error,
@@ -192,6 +193,7 @@ const StreamingQuestionAnswer = ({ sessionId, useStreaming, setUseStreaming }) =
           finalAnswer={finalAnswer}
           isRewriting={isRewriting}
           currentStage={currentStage}
+          progressInfo={progressInfo}
           attemptInfo={attemptInfo}
           isStreaming={isStreaming}
         />

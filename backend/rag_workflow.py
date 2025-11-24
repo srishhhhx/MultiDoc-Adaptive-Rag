@@ -216,13 +216,43 @@ class RAGWorkflow:
             state["execution_plan"] = analysis_result["tasks"]
             state["metadata"] = analysis_result["metadata"]
 
-            # Stage 2: Retrieval
+            # Stage 1.1: Analysis Complete - Show routing decision
+            task_types = [task.get("tool", "unknown") for task in state["execution_plan"]]
+            has_docs = "vectorstore_search" in task_types
+            has_web = "tavily_search" in task_types
+
+            if has_docs and has_web:
+                routing_msg = "Using hybrid search (documents + web)"
+            elif has_web:
+                routing_msg = "Routing to web search"
+            else:
+                routing_msg = "Searching your documents"
+
             yield {
-                "type": "stage",
-                "stage": "retrieving",
-                "message": "Searching through documents...",
+                "type": "progress",
+                "stage": "analysis_complete",
+                "message": f"Analysis complete - {routing_msg}",
+                "routing": "hybrid" if (has_docs and has_web) else ("web" if has_web else "documents"),
                 "timestamp": time.time()
             }
+
+            # Stage 2: Retrieval
+            # Determine search strategy from execution plan
+            search_strategy = "hybrid" if any(task.get("tool") == "tavily_search" for task in state["execution_plan"]) else "documents"
+            if search_strategy == "hybrid":
+                yield {
+                    "type": "stage",
+                    "stage": "retrieving",
+                    "message": "Searching documents and web sources...",
+                    "timestamp": time.time()
+                }
+            else:
+                yield {
+                    "type": "stage",
+                    "stage": "retrieving",
+                    "message": "Searching through your documents...",
+                    "timestamp": time.time()
+                }
 
             # Execute multi-tool plan
             results = self.multi_tool_executor.execute_plan(
@@ -237,8 +267,68 @@ class RAGWorkflow:
             state["combined_context"] = results.get("combined_context", "")
             state["rerank_completed"] = results.get("rerank_completed", True)
 
+            # Stage 2.1: Retrieval Complete - Show results summary
+            doc_count = len(state["vectorstore_results"])
+            web_count = len(state["web_search_results"])
+
+            if search_strategy == "hybrid":
+                yield {
+                    "type": "progress",
+                    "stage": "retrieval_complete",
+                    "message": f"Found {doc_count} document chunks and {web_count} web sources",
+                    "doc_count": doc_count,
+                    "web_count": web_count,
+                    "timestamp": time.time()
+                }
+            else:
+                yield {
+                    "type": "progress",
+                    "stage": "retrieval_complete",
+                    "message": f"Found {doc_count} relevant chunks from your documents",
+                    "doc_count": doc_count,
+                    "timestamp": time.time()
+                }
+
+            # Stage 2.2: Reranking (if applied)
+            if state["rerank_completed"] and doc_count > 0:
+                yield {
+                    "type": "stage",
+                    "stage": "reranking",
+                    "message": f"Reranking {doc_count} chunks for optimal relevance...",
+                    "timestamp": time.time()
+                }
+                # Small delay to show reranking stage
+                await asyncio.sleep(0.1)
+                yield {
+                    "type": "progress",
+                    "stage": "reranking_complete",
+                    "message": "Reranking complete - prioritized most relevant content",
+                    "timestamp": time.time()
+                }
+
+            # Stage 2.3: Document Evaluation
+            if doc_count > 0:
+                yield {
+                    "type": "stage",
+                    "stage": "evaluating",
+                    "message": "Evaluating document relevance...",
+                    "timestamp": time.time()
+                }
+
             # Evaluate documents
             state = await self._evaluate_documents_for_streaming(state)
+
+            # Show evaluation results
+            if doc_count > 0:
+                relevant_count = sum(1 for eval in state.get("document_evaluations", []) if eval.get("score") == "YES")
+                yield {
+                    "type": "progress",
+                    "stage": "evaluation_complete",
+                    "message": f"Quality check complete - {relevant_count}/{doc_count} chunks highly relevant",
+                    "relevant_count": relevant_count,
+                    "total_count": doc_count,
+                    "timestamp": time.time()
+                }
 
             # Main generation loop (supports self-correction with max 2 attempts)
             MAX_ATTEMPTS = 2
@@ -284,10 +374,25 @@ class RAGWorkflow:
                     "timestamp": time.time()
                 }
 
+                # Stage 4.1: Running quality checks
+                yield {
+                    "type": "progress",
+                    "stage": "validation_checking",
+                    "message": "Checking for hallucinations and relevance...",
+                    "timestamp": time.time()
+                }
+
                 # Check for hallucinations
                 validation_result = await self._validate_answer_for_streaming(state)
 
+                # Stage 4.2: Validation results
                 if validation_result["is_valid"]:
+                    yield {
+                        "type": "progress",
+                        "stage": "validation_passed",
+                        "message": "Answer validated - grounded and relevant",
+                        "timestamp": time.time()
+                    }
                     # Answer is good!
                     yield {
                         "type": "validation_success",
@@ -320,10 +425,25 @@ class RAGWorkflow:
                 elif attempt < MAX_ATTEMPTS:
                     # Hallucination detected, need to rewrite
                     yield {
+                        "type": "progress",
+                        "stage": "validation_failed",
+                        "message": "Answer needs improvement - initiating self-correction",
+                        "timestamp": time.time()
+                    }
+
+                    yield {
                         "type": "rewrite",
                         "reason": validation_result.get("reason", "Detected potential inaccuracy"),
                         "attempt": attempt,
                         "max_attempts": MAX_ATTEMPTS,
+                        "timestamp": time.time()
+                    }
+
+                    # Show that we're preparing for retry
+                    yield {
+                        "type": "progress",
+                        "stage": "self_correcting",
+                        "message": f"Attempting self-correction (retry {attempt + 1}/{MAX_ATTEMPTS})...",
                         "timestamp": time.time()
                     }
 
