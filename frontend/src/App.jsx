@@ -48,7 +48,7 @@ function App() {
     if (!sessionId) return;
     
     try {
-      const response = await fetch(`http://localhost:8000/api/session/${sessionId}/document/${encodeURIComponent(documentId)}`, {
+      const response = await fetch(`/api/session/${sessionId}/document/${encodeURIComponent(documentId)}`, {
         method: 'DELETE',
       });
       

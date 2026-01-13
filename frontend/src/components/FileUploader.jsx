@@ -87,7 +87,7 @@ const FileUploader = ({ onUploadSuccess, sessionId, isAddMode = false }) => {
         formData.append('session_id', sessionId);
       }
 
-      const response = await axios.post('http://localhost:8000/api/upload-multiple', formData, {
+      const response = await axios.post('/api/upload-multiple', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -144,7 +144,7 @@ const FileUploader = ({ onUploadSuccess, sessionId, isAddMode = false }) => {
   const handleReset = async () => {
     // Clear the database when resetting
     try {
-      await axios.post('http://localhost:8000/api/clear-database');
+      await axios.post('/api/clear-database');
       console.log('Database cleared');
     } catch (err) {
       console.error('Error clearing database:', err);

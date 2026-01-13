@@ -389,7 +389,7 @@ export function useStreamingRAG(sessionId) {
 
     try {
       // Use fetch with streaming response
-      const response = await fetch('http://localhost:8000/api/ask-stream', {
+      const response = await fetch('/api/ask-stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -21,7 +21,7 @@ const QuestionAnswer = ({ sessionId }) => {
     setIsComplete(false);
 
     try {
-      const response = await axios.post('http://localhost:8000/api/ask', {
+      const response = await axios.post('/api/ask', {
         question: question,
         session_id: sessionId
       });
