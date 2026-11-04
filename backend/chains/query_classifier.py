@@ -8,16 +8,14 @@ and should strongly prefer document content over online search.
 import os
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm, structured
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
 # Initialize the LLM (using Flash for better performance)
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash", google_api_key=os.environ["GOOGLE_API_KEY"], temperature=0.1
-)
+llm = get_llm("classify")
 
 # Query classification prompt
 classification_prompt_text = """You are a query classifier for a RAG system. Your job is to determine if a query is document-specific and should prioritize uploaded document content over online search.

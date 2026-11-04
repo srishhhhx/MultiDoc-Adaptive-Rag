@@ -10,8 +10,7 @@ import json
 import logging
 from typing import List, Dict, Any
 from langchain_core.prompts import PromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
-from backend.config import GOOGLE_API_KEY
+from backend.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +49,7 @@ class BatchDocumentAnalyzer:
     def __init__(self):
         """Initialize the batch analyzer with LLM"""
         try:
-            self.llm = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash-exp",
-                google_api_key=GOOGLE_API_KEY,
-                temperature=0.1,
-                convert_system_message_to_human=True
-            )
+            self.llm = get_llm("assess")
             
             self.prompt = PromptTemplate(
                 template=ANALYSIS_PROMPT_TEMPLATE,

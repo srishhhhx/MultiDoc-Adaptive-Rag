@@ -14,7 +14,7 @@ import os
 import logging
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -24,20 +24,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Initialize the LLM for query rewriting
-try:
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
-        google_api_key=os.environ["GOOGLE_API_KEY"], 
-        temperature=0.3  # Slightly higher temperature for creative rewriting
-    )
-except Exception as e:
-    logger.warning(f"Failed to initialize gemini-2.5-flash: {e}")
-    # Fallback to older Flash model instead of Pro for better performance
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
-        google_api_key=os.environ["GOOGLE_API_KEY"],
-        temperature=0.3
-    )
+llm = get_llm("rewrite")
 
 # Query Rewriting Prompt
 query_rewrite_prompt_text = """You are an expert at refining search queries. The user's original query failed to retrieve relevant documents. Your task is to rewrite the query to be more specific and targeted, based on the original intent and the failed context.

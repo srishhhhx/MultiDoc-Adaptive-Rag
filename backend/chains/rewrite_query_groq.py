@@ -6,8 +6,8 @@ llama-3.3-70b-versatile model. Instead of generating creative query strings that
 often fail with format errors, this chain surgically corrects failed tasks in the 
 JSON execution plan based on gap analysis reports.
 
-Performance: ~1-2 seconds vs ~10-28 seconds with Gemini
-Fallback: Automatically falls back to Gemini if Groq fails
+Performance: ~1-2 seconds vs ~10-28 seconds with the primary LLM
+Fallback: Automatically falls back to the primary LLM if Groq fails
 """
 
 import json
@@ -57,7 +57,7 @@ Your task is to generate a NEW, CORRECTED `execution_plan` (as a JSON list) that
 
 
 class PlanCorrectionClient:
-    """Client for performing plan-based correction with Groq primary and Gemini fallback"""
+    """Client for performing plan-based correction with Groq primary and LLM fallback"""
     
     def __init__(self):
         """Initialize Groq client for plan correction"""

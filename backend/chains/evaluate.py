@@ -16,17 +16,13 @@ to proceed with document-based answers or fall back to online search.
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm, structured
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",  # or "gemini-1.5-pro" if you want the faster/lighter one
-    temperature=0,
-    google_api_key=os.environ["GOOGLE_API_KEY"],
-)
+llm = get_llm("evaluate")
 
 
 class EvaluateDocs(BaseModel):
@@ -60,7 +56,7 @@ class EvaluateDocs(BaseModel):
     )
 
 
-structured_output = llm.with_structured_output(EvaluateDocs)
+structured_output = structured(llm, EvaluateDocs)
 
 system = """You are an expert document relevance evaluator for a RAG (Retrieval-Augmented Generation) system. Your role is to assess whether retrieved documents contain sufficient information to answer a user's query effectively.
 

@@ -10,16 +10,12 @@ import os
 from typing import List, Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm, structured
 from dotenv import load_dotenv
 
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0,
-    google_api_key=os.environ["GOOGLE_API_KEY"],
-)
+llm = get_llm("evaluate")
 
 
 class BatchRelevanceEvaluation(BaseModel):
@@ -67,7 +63,7 @@ class BatchRelevanceEvaluation(BaseModel):
     )
 
 
-structured_output = llm.with_structured_output(BatchRelevanceEvaluation)
+structured_output = structured(llm, BatchRelevanceEvaluation)
 
 system = """You are an expert answer quality evaluator for a HYBRID RAG system. Your role is to evaluate BOTH the document grounding AND question relevance of a generated answer in a single comprehensive assessment.
 

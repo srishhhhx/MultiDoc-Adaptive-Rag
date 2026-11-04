@@ -26,7 +26,6 @@ faiss_indexes/
 # Logs
 *.log
 
-tests/
 
 venv
 

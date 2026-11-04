@@ -17,7 +17,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm, structured
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -27,11 +27,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Initialize the LLM for query analysis
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash", 
-    google_api_key=os.environ["GOOGLE_API_KEY"], 
-    temperature=0.1
-)
+llm = get_llm("plan")
 
 # Enhanced Query Analysis Router Prompt with Metadata Extraction
 query_analysis_prompt_text = """You are an expert query analyst for an advanced RAG system. Your role is to analyze user queries, create structured execution plans, and extract structured metadata for efficient retrieval.

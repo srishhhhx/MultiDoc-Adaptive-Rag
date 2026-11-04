@@ -54,7 +54,7 @@ This agent was engineered for performance and reliability, achieving significant
 
 ### Architectural Advancements
 
-* **Hybrid LLM Strategy:** Deployed a dual-model setup using **Gemini 2.5 Flash** for reasoning and **Groq Llama3-8B** for evaluations, achieving a **35–40% reduction in latency** while maintaining high output quality.
+* **Hybrid LLM Strategy:** A dual-provider setup using **Qwen 3.8 27B (Cerebras)** for planning/generation and **Groq** for evaluations, with all models configured per pipeline role in one place (`backend/llm.py`). *(Latency figures below predate the move from Gemini and are being re-benchmarked.)*
 
 * **Hybrid Search with Reciprocal Rank Fusion:** Combined **FAISS (semantic)** and **BM25 (keyword)** search with **RRF (k=60)** fusion, improving retrieval recall by **5–15%** for both factual and contextual queries.
 
@@ -108,8 +108,8 @@ This agent was engineered for performance and reliability, achieving significant
 * **Backend:** Python 3.11+, FastAPI, Uvicorn
 * **AI Orchestration:** LangGraph
 * **LLMs:**
-    * Reasoning/Generation: Google Gemini 2.5 Flash (3-5x faster than Pro with minimal accuracy loss)
-    * Evaluation/Checks: Groq API (Llama3-8B for fast context assessment and quality gates)
+    * Reasoning/Generation: Qwen 3.8 27B on Cerebras (OpenAI-compatible API, configurable via `backend/llm.py`)
+    * Evaluation/Checks: Groq API (fast context assessment and quality gates)
 * **Vector Database:** FAISS (IndexHNSWFlat with persistent chunk store via Pickle)
 * **AI/ML Components:**
     * Embeddings: `BAAI/bge-base-en-v1.5` (upgraded from all-mpnet-base-v2, GPU-optimized)
@@ -164,7 +164,7 @@ AdvLang/
 ### Prerequisites
 * Python 3.11+
 * Node.js 18+
-* An .env file with GOOGLE_API_KEY, TAVILY_API_KEY, and GROQ_API_KEY.
+* An .env file with CEREBRAS_API_KEY, GROQ_API_KEY and TAVILY_API_KEY (see `.env.example`).
 
 ### Step 1: Clone & Setup
 ```bash
@@ -198,6 +198,14 @@ cd frontend
 npm run dev
 ```
 Access the application at http://localhost:5173 (or your Vite port).
+
+### Running tests and Docker
+```bash
+pip install -r requirements.txt pytest httpx
+pytest -q                       # offline: LLMs and embeddings are stubbed
+docker compose up --build       # backend :8000, frontend :3000
+```
+Admin/diagnostic endpoints (`/api/clear-database`, `/api/metrics/*`, ...) are disabled unless `ADMIN_API_KEY` is set; send it as `X-Admin-Key`. Uploads are capped by `MAX_UPLOAD_MB` (default 25).
 
 ## 9. Challenges Faced & Solutions
 This project navigated complex engineering challenges through iterative debugging and architectural refinement:

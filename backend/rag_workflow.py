@@ -25,12 +25,12 @@ from backend.state import GraphState, StreamEvent
 from backend.chains.generate_answer import generate_chain, generate_stream_chain
 from backend.chains.evaluate_groq import evaluate_documents as evaluate_docs  # Groq-optimized
 from backend.chains.evaluate_batch import evaluate_documents_batch
-from backend.chains.relevance_batch import evaluate_relevance_batch  # Gemini fallback
+from backend.chains.relevance_batch import evaluate_relevance_batch  # LLM fallback
 from backend.chains.relevance_groq import evaluate_relevance_batch_groq  # Groq primary (10-20x faster)
 from backend.chains.query_classifier import classify_query
-# CRITICAL: Query Analysis REVERTED to Gemini for reliability (Groq 70B failed on complex multi-part queries)
+# CRITICAL: Query Analysis uses the primary planning LLM for reliability (Groq 70B failed on complex multi-part queries)
 # The 3-11s latency is necessary to ensure the "brain" of the agent functions correctly
-from backend.chains.query_analysis_router import analyze_query  # GEMINI (reliable planning)
+from backend.chains.query_analysis_router import analyze_query  # primary planning LLM
 from backend.chains.multi_tool_executor import MultiToolExecutor
 from backend.chains.rerank_documents import rerank_documents
 # GROQ-POWERED CHAINS: Keep Groq for evaluation/recovery tasks (proven reliable)
@@ -978,8 +978,8 @@ class RAGWorkflow:
                 doc_type = doc.metadata.get('type', 'document') if hasattr(doc, 'metadata') else 'unknown'
                 print(f"   Source {i+1} (type: {doc_type}): {preview}...")
             
-            # **CRITICAL: Use Groq-powered evaluation (10-20x faster than Gemini)**
-            # This call has built-in Gemini fallback if Groq fails
+            # **CRITICAL: Use Groq-powered evaluation (much faster than the primary LLM)**
+            # This call has built-in LLM fallback if Groq fails
             batch_relevance_result = evaluate_relevance_batch_groq(question, validation_docs, solution)
             document_relevance_score = batch_relevance_result["document_relevance_score"]
             question_relevance_score = batch_relevance_result["question_relevance_score"]

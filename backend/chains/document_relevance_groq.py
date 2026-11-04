@@ -2,7 +2,7 @@
 Document Relevance (Hallucination Check) with Groq Integration
 
 This module evaluates whether LLM-generated answers are grounded in source documents.
-Uses Groq's fast inference for rapid hallucination detection with Gemini fallback.
+Uses Groq's fast inference for rapid hallucination detection with fallback LLM fallback.
 
 Key improvements:
 - 3-5x faster with Groq
@@ -29,11 +29,11 @@ try:
     GROQ_AVAILABLE = True
     logger.info("✅ Groq SDK imported successfully for hallucination detection")
 except ImportError as e:
-    logger.warning(f"❌ Groq client not available: {e}. Will use Gemini only")
+    logger.warning(f"❌ Groq client not available: {e}. Will use fallback LLM only")
     GROQ_AVAILABLE = False
 
-# Fallback to Gemini
-from langchain_google_genai import ChatGoogleGenerativeAI
+# Fallback to fallback LLM
+from backend.llm import get_llm, structured
 
 
 class DocumentRelevance(BaseModel):
@@ -87,13 +87,13 @@ Based on the evaluation criteria, is this answer properly grounded in the source
 
 class DocumentRelevanceClient:
     """
-    Document relevance (hallucination check) client with Groq primary and Gemini fallback.
+    Document relevance (hallucination check) client with Groq primary and fallback LLM fallback.
     """
     
     def __init__(self):
         """Initialize relevance client"""
         self.groq_client = None
-        self.gemini_client = None
+        self.fallback_client = None
         self.metrics = []
         
         # Initialize Groq - using smaller phi3 model for fast hallucination checks
@@ -108,16 +108,12 @@ class DocumentRelevanceClient:
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq client: {e}")
         
-        # Initialize Gemini fallback
+        # Initialize fallback LLM fallback
         try:
-            self.gemini_client = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash-exp",
-                temperature=0,
-                google_api_key=os.environ["GOOGLE_API_KEY"],
-            )
-            logger.info("✅ Document Relevance: Gemini fallback initialized")
+            self.fallback_client = get_llm("fallback")
+            logger.info("✅ Document Relevance: fallback LLM fallback initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize Gemini client: {e}")
+            logger.error(f"Failed to initialize fallback LLM client: {e}")
             raise
     
     def evaluate(
@@ -178,38 +174,38 @@ class DocumentRelevanceClient:
                 return relevance, metrics
                 
             except Exception as e:
-                logger.warning(f"Groq hallucination check failed: {e}, falling back to Gemini")
+                logger.warning(f"Groq hallucination check failed: {e}, falling back to fallback LLM")
         
-        # Fallback to Gemini
+        # Fallback to fallback LLM
         try:
-            logger.info("🔄 Using Gemini fallback for hallucination check...")
-            gemini_start = time.time()
+            logger.info("🔄 Using fallback LLM fallback for hallucination check...")
+            fallback_start = time.time()
             
-            # Use Gemini's structured output
-            structured_llm = self.gemini_client.with_structured_output(DocumentRelevance)
+            # Use fallback LLM's structured output
+            structured_llm = structured(self.fallback_client, DocumentRelevance)
             relevance = structured_llm.invoke(prompt)
             
-            gemini_latency = (time.time() - gemini_start) * 1000
+            fallback_latency = (time.time() - fallback_start) * 1000
             
             metrics = {
-                "model": "gemini-1.5-flash",
-                "latency_ms": gemini_latency,
+                "model": "fallback-llm",
+                "latency_ms": fallback_latency,
                 "tokens": 0,
                 "success": True,
                 "fallback_used": True
             }
             
             logger.info(
-                f"✅ Gemini hallucination check complete: {relevance.binary_score} "
+                f"✅ fallback LLM hallucination check complete: {relevance.binary_score} "
                 f"(confidence: {relevance.confidence:.2f}, "
-                f"{gemini_latency:.0f}ms)"
+                f"{fallback_latency:.0f}ms)"
             )
             
             self.metrics.append(metrics)
             return relevance, metrics
             
         except Exception as e:
-            logger.error(f"Both Groq and Gemini failed: {e}")
+            logger.error(f"Both Groq and fallback LLM failed: {e}")
             total_latency = (time.time() - start_time) * 1000
             
             # Return conservative default (mark as not grounded)
@@ -252,7 +248,7 @@ def check_document_relevance(documents: str, solution: str) -> DocumentRelevance
     """
     Check if LLM answer is grounded in source documents.
     
-    Uses Groq gemma-7b-it for fast hallucination detection with Gemini fallback.
+    Uses Groq gemma-7b-it for fast hallucination detection with fallback LLM fallback.
     
     Args:
         documents: Source documents text

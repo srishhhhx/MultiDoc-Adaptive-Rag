@@ -142,13 +142,9 @@ const FileUploader = ({ onUploadSuccess, sessionId, isAddMode = false }) => {
   };
 
   const handleReset = async () => {
-    // Clear the database when resetting
-    try {
-      await axios.post('/api/clear-database');
-      console.log('Database cleared');
-    } catch (err) {
-      console.error('Error clearing database:', err);
-    }
+    // Reset only clears local selection state. Server-side data belongs to the
+    // session and is removed via DELETE /api/session/{id}; the global
+    // clear-database endpoint must never be called from the client.
     
     setFiles([]);
     setError(null);

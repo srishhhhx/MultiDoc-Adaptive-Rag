@@ -22,7 +22,7 @@ import json
 import re
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -32,20 +32,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Initialize the LLM for context assessment
-try:
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
-        google_api_key=os.environ["GOOGLE_API_KEY"], 
-        temperature=0.1
-    )
-except Exception as e:
-    logger.warning(f"Failed to initialize gemini-2.5-flash: {e}")
-    # Fallback to older Flash model instead of Pro for better performance
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
-        google_api_key=os.environ["GOOGLE_API_KEY"],
-        temperature=0.1
-    )
+llm = get_llm("assess")
 
 # Enhanced Gap Analysis Prompt for Context Assessment
 context_assessment_prompt_text = """You are an expert document analyst performing a structured Gap Analysis to determine context sufficiency. Your task is to systematically evaluate whether the retrieved documents can adequately answer the user's question.

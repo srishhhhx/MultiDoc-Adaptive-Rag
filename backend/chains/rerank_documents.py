@@ -50,8 +50,13 @@ def _initialize_reranker():
             raise RuntimeError("Could not initialize the reranker model.") from e
 
 
-# Call the initialization function when the module is loaded.
-_initialize_reranker()
+# The model is loaded lazily on first use (or via preload_reranker() at API
+# startup) so that importing this module never downloads weights.
+
+
+def preload_reranker():
+    """Warm the reranker so the first user query doesn't pay the load cost."""
+    _initialize_reranker()
 
 # --- Reranking Function ---
 
@@ -80,6 +85,7 @@ def rerank_documents(query: str, documents: List, top_k: int = 5) -> List:
         return documents
 
     try:
+        _initialize_reranker()
         logger.info(f"Reranking {len(documents)} documents to return the top {top_k}.")
 
         # Prepare query-document pairs for the cross-encoder

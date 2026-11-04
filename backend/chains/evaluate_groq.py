@@ -2,12 +2,12 @@
 Document Evaluation Chain with Groq Integration
 
 This module handles document relevance evaluation using Groq's fast inference
-with qwen3-32b. Falls back to Gemini if Groq fails.
+with qwen3-32b. Falls back to fallback LLM if Groq fails.
 
 Key improvements:
 - 3-5x faster evaluation with Groq
 - Structured JSON output with Pydantic validation
-- Automatic fallback to Gemini
+- Automatic fallback to fallback LLM
 - Comprehensive metrics tracking
 """
 
@@ -18,7 +18,7 @@ import time
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm, structured
 
 load_dotenv()
 
@@ -31,7 +31,7 @@ try:
     GROQ_AVAILABLE = True
     logger.info("✅ Groq SDK imported successfully for document evaluation")
 except ImportError as e:
-    logger.warning(f"❌ Groq client not available: {e}. Will use Gemini only")
+    logger.warning(f"❌ Groq client not available: {e}. Will use fallback LLM only")
     GROQ_AVAILABLE = False
 
 
@@ -257,13 +257,13 @@ Provide your comprehensive batch evaluation now."""
 
 class DocumentEvaluationClient:
     """
-    Document evaluation client with Groq primary and Gemini fallback.
+    Document evaluation client with Groq primary and fallback LLM fallback.
     """
 
     def __init__(self):
         """Initialize evaluation client"""
         self.groq_client = None
-        self.gemini_client = None
+        self.fallback_client = None
         self.metrics = []
 
         # Initialize Groq
@@ -278,23 +278,19 @@ class DocumentEvaluationClient:
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq client: {e}")
 
-        # Initialize Gemini fallback
+        # Initialize fallback LLM fallback
         try:
-            self.gemini_client = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash-exp",
-                temperature=0,
-                google_api_key=os.environ["GOOGLE_API_KEY"],
-            )
-            logger.info("✅ Document Evaluation: Gemini fallback initialized")
+            self.fallback_client = get_llm("fallback")
+            logger.info("✅ Document Evaluation: fallback LLM fallback initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize Gemini client: {e}")
+            logger.error(f"Failed to initialize fallback LLM client: {e}")
             raise
 
     def evaluate(
         self, question: str, document: str, query_classification: str = "DOCUMENT_FIRST"
     ) -> tuple[EvaluateDocs, Dict[str, Any]]:
         """
-        Evaluate document relevance using Groq (primary) or Gemini (fallback).
+        Evaluate document relevance using Groq (primary) or fallback LLM (fallback).
 
         Args:
             question: User's query
@@ -350,38 +346,38 @@ class DocumentEvaluationClient:
                 return evaluation, metrics
 
             except Exception as e:
-                logger.warning(f"Groq evaluation failed: {e}, falling back to Gemini")
+                logger.warning(f"Groq evaluation failed: {e}, falling back to fallback LLM")
 
-        # Fallback to Gemini
+        # Fallback to fallback LLM
         try:
-            logger.info("🔄 Using Gemini fallback for document evaluation...")
-            gemini_start = time.time()
+            logger.info("🔄 Using fallback LLM fallback for document evaluation...")
+            fallback_start = time.time()
 
-            # Use Gemini's structured output
-            structured_llm = self.gemini_client.with_structured_output(EvaluateDocs)
+            # Use fallback LLM's structured output
+            structured_llm = structured(self.fallback_client, EvaluateDocs)
             evaluation = structured_llm.invoke(prompt)
 
-            gemini_latency = (time.time() - gemini_start) * 1000
+            fallback_latency = (time.time() - fallback_start) * 1000
 
             metrics = {
-                "model": "gemini-2.5-flash",
-                "latency_ms": gemini_latency,
+                "model": "fallback-llm",
+                "latency_ms": fallback_latency,
                 "tokens": 0,
                 "success": True,
                 "fallback_used": True,
             }
 
             logger.info(
-                f"✅ Gemini evaluation complete: {evaluation.score} "
+                f"✅ fallback LLM evaluation complete: {evaluation.score} "
                 f"(relevance: {evaluation.relevance_score:.2f}, "
-                f"{gemini_latency:.0f}ms)"
+                f"{fallback_latency:.0f}ms)"
             )
 
             self.metrics.append(metrics)
             return evaluation, metrics
 
         except Exception as e:
-            logger.error(f"Both Groq and Gemini failed: {e}")
+            logger.error(f"Both Groq and fallback LLM failed: {e}")
             total_latency = (time.time() - start_time) * 1000
 
             # Return default evaluation
@@ -497,25 +493,23 @@ class DocumentEvaluationClient:
 
             except Exception as e:
                 logger.warning(
-                    f"Groq batch evaluation failed: {e}, falling back to Gemini"
+                    f"Groq batch evaluation failed: {e}, falling back to fallback LLM"
                 )
 
-        # Fallback to Gemini
+        # Fallback to fallback LLM
         try:
-            logger.info("🔄 Using Gemini fallback for batch document evaluation...")
-            gemini_start = time.time()
+            logger.info("🔄 Using fallback LLM fallback for batch document evaluation...")
+            fallback_start = time.time()
 
-            # Use Gemini's structured output
-            structured_llm = self.gemini_client.with_structured_output(
-                BatchEvaluationResult
-            )
+            # Use fallback LLM's structured output
+            structured_llm = structured(self.fallback_client, BatchEvaluationResult)
             batch_result = structured_llm.invoke(prompt)
 
-            gemini_latency = (time.time() - gemini_start) * 1000
+            fallback_latency = (time.time() - fallback_start) * 1000
 
             metrics = {
-                "model": "gemini-2.0-flash",
-                "latency_ms": gemini_latency,
+                "model": "fallback-llm",
+                "latency_ms": fallback_latency,
                 "tokens": 0,
                 "success": True,
                 "fallback_used": True,
@@ -524,16 +518,16 @@ class DocumentEvaluationClient:
             }
 
             logger.info(
-                f"✅ Gemini batch evaluation complete: {len(batch_result.evaluations)} documents "
-                f"({gemini_latency:.0f}ms total, "
-                f"{gemini_latency / len(documents):.0f}ms per doc)"
+                f"✅ fallback LLM batch evaluation complete: {len(batch_result.evaluations)} documents "
+                f"({fallback_latency:.0f}ms total, "
+                f"{fallback_latency / len(documents):.0f}ms per doc)"
             )
 
             self.metrics.append(metrics)
             return batch_result, metrics
 
         except Exception as e:
-            logger.error(f"Both Groq and Gemini batch evaluation failed: {e}")
+            logger.error(f"Both Groq and fallback LLM batch evaluation failed: {e}")
             total_latency = (time.time() - start_time) * 1000
 
             # Return default evaluations for all documents
@@ -587,7 +581,7 @@ def evaluate_documents(
     """
     Evaluate document relevance for a query.
 
-    Uses Groq qwen3-32b for fast evaluation with Gemini fallback.
+    Uses Groq qwen3-32b for fast evaluation with fallback LLM fallback.
 
     Args:
         question: User's query
@@ -611,7 +605,7 @@ def evaluate_documents_batch(
     This is the recommended method for evaluating multiple documents as it
     eliminates the N+1 query problem and significantly reduces latency.
 
-    Uses Groq qwen3-32b for fast evaluation with Gemini fallback.
+    Uses Groq qwen3-32b for fast evaluation with fallback LLM fallback.
 
     Args:
         question: User's query

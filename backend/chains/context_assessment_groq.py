@@ -3,14 +3,14 @@ Enhanced Gap Analysis Context Assessment Chain with Groq Integration
 
 This module implements context assessment using Groq's llama-3.3-70b-versatile
 model for reliable Gap Analysis on complex multi-part queries. Falls back to 
-Gemini if Groq fails.
+fallback LLM if Groq fails.
 
 CRITICAL: Upgraded from 8B to 70B model to fix false negative bug where perfect
 context was incorrectly flagged as insufficient, triggering unnecessary rewrite loops.
 
 Key improvements:
 - Reliable Gap Analysis with 70B reasoning power
-- Automatic fallback to Gemini
+- Automatic fallback to fallback LLM
 - Comprehensive latency tracking
 - Structured JSON output parsing
 """
@@ -35,11 +35,11 @@ try:
     GROQ_AVAILABLE = True
     logger.info("✅ Groq SDK imported successfully for context assessment")
 except ImportError as e:
-    logger.warning(f"❌ Groq client not available: {e}. Will use Gemini only")
+    logger.warning(f"❌ Groq client not available: {e}. Will use fallback LLM only")
     GROQ_AVAILABLE = False
 
-# Fallback to Gemini
-from langchain_google_genai import ChatGoogleGenerativeAI
+# Fallback to fallback LLM
+from backend.llm import get_llm, structured
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -100,19 +100,19 @@ Provide your JSON assessment of the combined context:"""
 
 class ContextAssessmentClient:
     """
-    Context assessment client with Groq primary and Gemini fallback.
+    Context assessment client with Groq primary and fallback LLM fallback.
     
     Uses Groq's llama-3.3-70b-versatile for reliable Gap Analysis on complex
-    multi-part queries, with automatic fallback to Gemini Flash if Groq fails.
+    multi-part queries, with automatic fallback to fallback LLM Flash if Groq fails.
     
     CRITICAL: Upgraded from 8B to 70B to fix false negative bug (55% coverage
     on perfect context), preventing unnecessary rewrite loop triggers.
     """
     
     def __init__(self):
-        """Initialize assessment client with Groq and Gemini"""
+        """Initialize assessment client with Groq and fallback LLM"""
         self.groq_client = None
-        self.gemini_client = None
+        self.fallback_client = None
         self.metrics = []
         
         # Initialize Groq client
@@ -130,21 +130,17 @@ class ContextAssessmentClient:
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq client: {e}")
         
-        # Initialize Gemini fallback
+        # Initialize fallback LLM fallback
         try:
-            self.gemini_client = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash-exp",
-                google_api_key=os.environ["GOOGLE_API_KEY"],
-                temperature=0.1
-            )
-            logger.info("✅ Context Assessment: Gemini fallback initialized")
+            self.fallback_client = get_llm("fallback")
+            logger.info("✅ Context Assessment: fallback LLM fallback initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize Gemini client: {e}")
+            logger.error(f"Failed to initialize fallback LLM client: {e}")
             raise
     
     def assess(self, original_question: str, documents: list, web_search_results: list = None) -> tuple[str, Dict[str, Any], Dict[str, Any]]:
         """
-        Assess context sufficiency using Groq (primary) or Gemini (fallback).
+        Assess context sufficiency using Groq (primary) or fallback LLM (fallback).
         
         CRITICAL: Now TOOL-AWARE - analyzes COMBINED context from both documents and web results.
         
@@ -237,48 +233,48 @@ class ContextAssessmentClient:
                 return assessment, gap_analysis_json, metrics
                 
             except Exception as e:
-                logger.warning(f"Groq assessment failed: {e}, falling back to Gemini")
+                logger.warning(f"Groq assessment failed: {e}, falling back to fallback LLM")
         
-        # Fallback to Gemini
+        # Fallback to fallback LLM
         try:
-            logger.info("🔄 Using Gemini fallback for context assessment...")
-            gemini_start = time.time()
+            logger.info("🔄 Using fallback LLM fallback for context assessment...")
+            fallback_start = time.time()
             
             prompt_template = ChatPromptTemplate.from_messages([
                 ("system", CONTEXT_ASSESSMENT_PROMPT),
                 ("user", "Please assess the context sufficiency.")
             ])
             
-            chain = prompt_template | self.gemini_client | StrOutputParser()
+            chain = prompt_template | self.fallback_client | StrOutputParser()
             response_text = chain.invoke({
                 "original_question": original_question,
                 "documents": documents_text,
                 "web_results": web_results_text
             })
             
-            gemini_latency = (time.time() - gemini_start) * 1000
+            fallback_latency = (time.time() - fallback_start) * 1000
             
             # Parse response - now returns (decision, json_dict)
             assessment, gap_analysis_json = self._parse_assessment(response_text)
             
             metrics = {
-                "model": "gemini-1.5-flash",
-                "latency_ms": gemini_latency,
+                "model": "fallback-llm",
+                "latency_ms": fallback_latency,
                 "tokens": 0,
                 "success": True,
                 "fallback_used": True
             }
             
             logger.info(
-                f"✅ Gemini assessment complete: {assessment} "
-                f"({gemini_latency:.0f}ms)"
+                f"✅ fallback LLM assessment complete: {assessment} "
+                f"({fallback_latency:.0f}ms)"
             )
             
             self.metrics.append(metrics)
             return assessment, gap_analysis_json, metrics
             
         except Exception as e:
-            logger.error(f"Both Groq and Gemini failed: {e}")
+            logger.error(f"Both Groq and fallback LLM failed: {e}")
             total_latency = (time.time() - start_time) * 1000
             
             metrics = {
@@ -291,7 +287,7 @@ class ContextAssessmentClient:
             }
             
             self.metrics.append(metrics)
-            return "insufficient", {"final_decision": "insufficient", "reasoning": "Both Groq and Gemini failed"}, metrics
+            return "insufficient", {"final_decision": "insufficient", "reasoning": "Both Groq and fallback LLM failed"}, metrics
     
     def _parse_assessment(self, response_text: str) -> tuple[str, Dict[str, Any]]:
         """
@@ -458,7 +454,7 @@ def assess_context_sufficiency(original_question: str, documents: list, web_sear
 
     **OPTIMIZED**: Includes fast heuristic pre-check to avoid expensive LLM calls when context is obviously good.
 
-    Uses Groq llama-3.3-70b-versatile for reliable Gap Analysis with Gemini fallback.
+    Uses Groq llama-3.3-70b-versatile for reliable Gap Analysis with fallback LLM fallback.
 
     Previous Bug: Only assessed documents, ignored web results → false "insufficient" on hybrid queries
     Fix: Now accepts and analyzes both documents AND web_search_results

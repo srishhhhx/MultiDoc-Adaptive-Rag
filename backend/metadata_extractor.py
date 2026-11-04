@@ -20,7 +20,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langchain_core.documents import Document
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm
 from langchain_core.prompts import ChatPromptTemplate
 
 # Configure logging
@@ -102,15 +102,11 @@ class MetadataExtractor:
         self.cache_enabled = cache_enabled
         self.extraction_cache = {}
         
-        # Initialize LLM for semantic extraction (Gemini Flash for speed)
+        # Initialize LLM for semantic extraction 
         if self.use_llm:
             try:
-                self.llm = ChatGoogleGenerativeAI(
-                    model="gemini-1.5-flash",
-                    temperature=0,
-                    max_tokens=500,  # Keep responses concise
-                )
-                logger.info("✅ Initialized Gemini Flash for metadata extraction")
+                self.llm = get_llm("metadata")
+                logger.info("✅ Initialized LLM for metadata extraction")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize LLM: {e}. Falling back to regex-only mode.")
                 self.use_llm = False

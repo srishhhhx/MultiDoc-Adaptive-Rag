@@ -1,7 +1,7 @@
 """
 Groq-Powered Batched Relevance Evaluation Chain for Maximum Performance
 
-This module provides a high-performance alternative to the Gemini-based relevance
+This module provides a high-performance alternative to the fallback LLM-based relevance
 evaluation, using Groq's llama-3.1-8b-instant for 10-20x faster evaluation while
 maintaining the same sophisticated quality assessment logic.
 
@@ -13,7 +13,7 @@ import json
 import time
 from typing import List, Dict, Any
 from pydantic import BaseModel, Field
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm, structured
 from dotenv import load_dotenv
 
 # Import Groq client from correct location
@@ -68,7 +68,7 @@ class BatchRelevanceEvaluation(BaseModel):
 
 
 # **CRITICAL: THE COMPLETE SOPHISTICATED BATCH RELEVANCE PROMPT**
-# This is the EXACT same prompt used in the Gemini version to ensure quality parity
+# This is the EXACT same prompt used in the fallback LLM version to ensure quality parity
 BATCH_RELEVANCE_PROMPT = """You are an expert answer quality evaluator for a HYBRID RAG system. Your role is to evaluate BOTH the document grounding AND question relevance of a generated answer in a single comprehensive assessment.
 
 **CRITICAL: HYBRID CONTEXT AWARENESS**
@@ -175,10 +175,10 @@ Provide a comprehensive evaluation covering both aspects, with special attention
 
 
 class RelevanceEvaluationClient:
-    """Client for performing relevance evaluations with Groq primary and Gemini fallback"""
+    """Client for performing relevance evaluations with Groq primary and fallback LLM fallback"""
     
     def __init__(self):
-        """Initialize both Groq and Gemini clients"""
+        """Initialize both Groq and fallback LLM clients"""
         # Primary: Groq with 70B model for complex reasoning
         # NOTE: Using llama-3.3-70b-versatile instead of 8B for this critical QA task
         # The 70B model is required to handle the sophisticated multi-rule prompt
@@ -190,26 +190,22 @@ class RelevanceEvaluationClient:
             print(f"⚠️ Groq client initialization failed: {e}")
             self.groq_client = None
         
-        # Fallback: Gemini for reliability
+        # Fallback: fallback LLM for reliability
         try:
-            self.gemini_client = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
-                temperature=0,
-                google_api_key=os.environ["GOOGLE_API_KEY"],
-            )
-            self.gemini_structured = self.gemini_client.with_structured_output(BatchRelevanceEvaluation)
-            print("✅ Gemini fallback initialized for relevance evaluation")
+            self.fallback_client = get_llm("fallback")
+            self.fallback_structured = structured(self.fallback_client, BatchRelevanceEvaluation)
+            print("✅ fallback LLM fallback initialized for relevance evaluation")
         except Exception as e:
-            print(f"⚠️ Gemini fallback initialization failed: {e}")
-            self.gemini_client = None
-            self.gemini_structured = None
+            print(f"⚠️ fallback LLM fallback initialization failed: {e}")
+            self.fallback_client = None
+            self.fallback_structured = None
         
         # Metrics tracking
         self.metrics = []
     
     def evaluate(self, question: str, documents: List, solution: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """
-        Evaluate answer relevance and grounding using Groq (primary) or Gemini (fallback)
+        Evaluate answer relevance and grounding using Groq (primary) or fallback LLM (fallback)
         
         Args:
             question: User's query
@@ -277,47 +273,47 @@ class RelevanceEvaluationClient:
                 return result_dict, metrics
                 
             except Exception as e:
-                print(f"⚠️ Groq relevance evaluation failed: {e}, falling back to Gemini")
+                print(f"⚠️ Groq relevance evaluation failed: {e}, falling back to fallback LLM")
         
-        # Fallback to Gemini
-        if self.gemini_structured:
+        # Fallback to fallback LLM
+        if self.fallback_structured:
             try:
-                print("🔄 Using Gemini fallback for relevance evaluation...")
-                gemini_start = time.time()
+                print("🔄 Using fallback LLM fallback for relevance evaluation...")
+                fallback_start = time.time()
                 
-                # Use Gemini's structured output
-                batch_result = self.gemini_structured.invoke({
+                # Use fallback LLM's structured output
+                batch_result = self.fallback_structured.invoke({
                     "question": question,
                     "documents_text": documents_text,
                     "solution": solution
                 })
                 
-                gemini_latency = (time.time() - gemini_start) * 1000
+                fallback_latency = (time.time() - fallback_start) * 1000
                 
                 # Convert to compatible format
                 result_dict = self._convert_to_result_dict(batch_result)
                 
                 metrics = {
-                    "model": "gemini-2.5-flash",
-                    "latency_ms": gemini_latency,
+                    "model": "fallback-llm",
+                    "latency_ms": fallback_latency,
                     "tokens": 0,
                     "success": True,
                     "fallback_used": True,
                 }
                 
                 print(
-                    f"✅ Gemini relevance evaluation complete: "
+                    f"✅ fallback LLM relevance evaluation complete: "
                     f"Grounded={batch_result.document_grounding}, "
                     f"Relevant={batch_result.question_relevance}, "
                     f"Source={batch_result.grounding_source} "
-                    f"({gemini_latency:.0f}ms)"
+                    f"({fallback_latency:.0f}ms)"
                 )
                 
                 self.metrics.append(metrics)
                 return result_dict, metrics
                 
             except Exception as e:
-                print(f"❌ Gemini relevance evaluation also failed: {e}")
+                print(f"❌ fallback LLM relevance evaluation also failed: {e}")
         
         # Both failed - return safe defaults
         total_latency = (time.time() - start_time) * 1000
@@ -325,7 +321,7 @@ class RelevanceEvaluationClient:
         class FallbackScore:
             binary_score = False
             confidence_score = 0.0
-            explanation = "Evaluation failed - both Groq and Gemini unavailable"
+            explanation = "Evaluation failed - both Groq and fallback LLM unavailable"
         
         result_dict = {
             "document_relevance_score": FallbackScore(),
@@ -342,7 +338,7 @@ class RelevanceEvaluationClient:
             "tokens": 0,
             "success": False,
             "fallback_used": True,
-            "error": "Both Groq and Gemini failed"
+            "error": "Both Groq and fallback LLM failed"
         }
         
         self.metrics.append(metrics)
@@ -452,9 +448,9 @@ def get_relevance_client() -> RelevanceEvaluationClient:
 
 def evaluate_relevance_batch_groq(question: str, documents: List, solution: str) -> Dict[str, Any]:
     """
-    Groq-powered batch relevance evaluation (10-20x faster than Gemini)
+    Groq-powered batch relevance evaluation (10-20x faster than fallback LLM)
     
-    This is the high-performance replacement for the Gemini-based evaluate_relevance_batch.
+    This is the high-performance replacement for the fallback LLM-based evaluate_relevance_batch.
     Uses the EXACT same sophisticated prompt and evaluation logic, but with Groq for speed.
     
     Args:

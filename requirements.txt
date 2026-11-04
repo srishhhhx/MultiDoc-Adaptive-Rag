@@ -4,6 +4,7 @@ python-multipart
 sse-starlette
 python-dotenv
 langchain-core
+langchain-text-splitters
 faiss-cpu
 langchain-groq
 langchain-community
@@ -20,8 +21,7 @@ langsmith
 sentence-transformers
 langdetect
 langchain_huggingface
-langchain-google-genai
-google-generativeai
+langchain-openai
 msoffcrypto-tool
 docx2txt
 pdf2image

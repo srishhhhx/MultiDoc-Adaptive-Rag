@@ -2,11 +2,11 @@
 Query Analysis Router for Multi-Tool RAG Agent - GROQ-POWERED VERSION
 
 This module implements an intelligent query analysis router using Groq's llama-3.3-70b-versatile
-model for 10-20x faster query analysis compared to Gemini. The 70B model is required for
+model for 10-20x faster query analysis compared to fallback LLM. The 70B model is required for
 the complex reasoning needed to reliably decompose queries and generate perfect JSON execution plans.
 
-Performance: ~1-2 seconds vs ~3-12 seconds with Gemini
-Fallback: Automatically falls back to Gemini if Groq fails
+Performance: ~1-2 seconds vs ~3-12 seconds with fallback LLM
+Fallback: Automatically falls back to fallback LLM if Groq fails
 """
 
 import os
@@ -16,7 +16,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm, structured
 from dotenv import load_dotenv
 
 # Import Groq client
@@ -29,7 +29,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Enhanced Query Analysis Router Prompt with Metadata Extraction
-# (EXACT SAME PROMPT AS GEMINI VERSION)
+# (EXACT SAME PROMPT AS THE PRIMARY-LLM VERSION)
 query_analysis_prompt_text = """You are an expert query analyst for an advanced RAG system. Your role is to analyze user queries, create structured execution plans, and extract structured metadata for efficient retrieval.
 
 AVAILABLE DOCUMENTS:
@@ -209,10 +209,10 @@ Respond with ONLY the JSON object containing both 'tasks' and 'metadata', no add
 
 
 class QueryAnalysisClient:
-    """Client for performing query analysis with Groq primary and Gemini fallback"""
+    """Client for performing query analysis with Groq primary and fallback LLM fallback"""
     
     def __init__(self):
-        """Initialize both Groq and Gemini clients"""
+        """Initialize both Groq and fallback LLM clients"""
         # Primary: Groq with 70B model for complex reasoning
         # NOTE: Using llama-3.3-70b-versatile for this critical reasoning task
         # The 70B model is required to handle sophisticated query decomposition
@@ -224,21 +224,17 @@ class QueryAnalysisClient:
             logger.warning(f"⚠️ Groq client initialization failed: {e}")
             self.groq_client = None
         
-        # Fallback: Gemini for reliability
+        # Fallback: fallback LLM for reliability
         try:
-            self.gemini_client = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
-                temperature=0.1,
-                google_api_key=os.environ["GOOGLE_API_KEY"],
-            )
-            logger.info("✅ Gemini fallback initialized for query analysis")
+            self.fallback_client = get_llm("fallback")
+            logger.info("✅ fallback LLM fallback initialized for query analysis")
         except Exception as e:
-            logger.warning(f"⚠️ Gemini fallback initialization failed: {e}")
-            self.gemini_client = None
+            logger.warning(f"⚠️ fallback LLM fallback initialization failed: {e}")
+            self.fallback_client = None
     
     def analyze(self, question: str, available_documents: Optional[List[str]] = None) -> Dict[str, Any]:
         """
-        Analyze query using Groq (primary) or Gemini (fallback)
+        Analyze query using Groq (primary) or fallback LLM (fallback)
         
         Args:
             question: User's query
@@ -318,14 +314,14 @@ class QueryAnalysisClient:
                 
             except Exception as e:
                 logger.error(f"❌ Groq query analysis failed: {e}")
-                logger.warning("🔄 Falling back to Gemini...")
+                logger.warning("🔄 Falling back to fallback LLM...")
         
-        # Fallback to Gemini
-        if self.gemini_client:
+        # Fallback to fallback LLM
+        if self.fallback_client:
             try:
-                logger.info("🔄 GEMINI FALLBACK: Analyzing with gemini-2.5-flash")
+                logger.info("🔄 LLM FALLBACK: analyzing with fallback LLM")
                 
-                # Use Gemini with LangChain
+                # Use fallback LLM with LangChain
                 from langchain_core.prompts import ChatPromptTemplate
                 from langchain_core.output_parsers import StrOutputParser
                 
@@ -334,7 +330,7 @@ class QueryAnalysisClient:
                     ("user", "Now analyze this query: {question}")
                 ])
                 
-                chain = analysis_prompt | self.gemini_client | StrOutputParser()
+                chain = analysis_prompt | self.fallback_client | StrOutputParser()
                 
                 result = chain.invoke({
                     "question": question,
@@ -342,7 +338,7 @@ class QueryAnalysisClient:
                 })
                 
                 latency_ms = (time.time() - start_time) * 1000
-                logger.info(f"✅ Gemini fallback complete ({latency_ms:.0f}ms)")
+                logger.info(f"✅ fallback LLM fallback complete ({latency_ms:.0f}ms)")
                 
                 # Clean and parse JSON
                 cleaned_result = result.strip()
@@ -373,14 +369,14 @@ class QueryAnalysisClient:
                 metadata.setdefault("mentioned_companies", [])
                 metadata.setdefault("date_range", None)
                 
-                logger.info(f"Successfully parsed Gemini fallback: {len(tasks)} tasks")
+                logger.info(f"Successfully parsed fallback LLM fallback: {len(tasks)} tasks")
                 return analysis_result
                 
             except Exception as e:
-                logger.error(f"❌ Gemini fallback also failed: {e}")
+                logger.error(f"❌ fallback LLM fallback also failed: {e}")
         
         # Both failed - use pattern-based fallback
-        logger.error("❌ Both Groq and Gemini failed - using pattern-based fallback")
+        logger.error("❌ Both Groq and fallback LLM failed - using pattern-based fallback")
         return _create_fallback_analysis(question, available_documents)
 
 
@@ -418,7 +414,7 @@ def analyze_query(question: str, available_documents: Optional[List[str]] = None
 
 def _create_fallback_analysis(question: str, available_documents: Optional[List[str]] = None) -> Dict[str, Any]:
     """
-    Create a fallback analysis result when both Groq and Gemini fail
+    Create a fallback analysis result when both Groq and fallback LLM fail
     
     Args:
         question: The user's question

@@ -20,8 +20,8 @@ if __name__ == "__main__":
     # Run the FastAPI app
     uvicorn.run(
         "backend.api:app",
-        host="0.0.0.0",
+        host=os.getenv("API_HOST", "127.0.0.1"),
         port=8000,
-        reload=True,
+        reload=os.getenv("API_RELOAD", "0") == "1",
         log_level="info"
     )

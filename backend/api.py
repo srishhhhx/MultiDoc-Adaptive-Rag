@@ -7,7 +7,7 @@ This API provides endpoints for:
 - Real-time status updates
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from typing import Optional, Dict, List
 import os
 import tempfile
+import threading
+import hmac
 import logging
 import json
 from datetime import datetime
@@ -25,7 +27,40 @@ from backend.document_loader import MultiModalDocumentLoader
 from backend.document_processor import DocumentProcessor
 from backend.rag_workflow import RAGWorkflow
 from backend.session_manager import session_manager, ConversationExchange
-from backend.evaluation.runtime_metrics_tracker import RuntimeMetricsTracker
+try:
+    from backend.evaluation.runtime_metrics_tracker import RuntimeMetricsTracker
+except ImportError:  # backend/evaluation is not part of the repository
+    import time as _time
+    from types import SimpleNamespace
+
+    class RuntimeMetricsTracker:  # type: ignore[no-redef]
+        """No-op stand-in so the API runs without the evaluation package."""
+
+        def __init__(self):
+            self.query_metrics = []
+
+        def extract_from_state(self, state, session_id, start_time):
+            return SimpleNamespace(
+                query_type=None,
+                latency_ms=(_time.time() - start_time) * 1000,
+                answer_relevance=None,
+                faithfulness=None,
+            )
+
+        def get_session_metrics(self, session_id):
+            return None
+
+        def get_all_session_ids(self):
+            return []
+
+        def _unavailable(self, *args, **kwargs):
+            raise HTTPException(status_code=501, detail="Metrics tracking is not installed")
+
+        get_metrics_summary = get_aggregated_metrics = export_to_json = clear = _unavailable
+
+    logging.getLogger(__name__).warning(
+        "backend.evaluation not found; runtime metrics are disabled"
+    )
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -41,11 +76,58 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Vite default port
+    allow_origins=[o.strip() for o in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"
+    ).split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],  # Allow all headers including Accept: text/event-stream
 )
+
+
+# --- Security helpers -------------------------------------------------------
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024
+
+
+def require_admin(x_admin_key: Optional[str] = Header(default=None)):
+    """Guard for destructive/diagnostic endpoints.
+
+    Disabled (404) unless ADMIN_API_KEY is set; otherwise the caller must send
+    it in the X-Admin-Key header.
+    """
+    expected = os.getenv("ADMIN_API_KEY")
+    if not expected:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not x_admin_key or not hmac.compare_digest(x_admin_key, expected):
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+
+async def read_upload_limited(file: UploadFile) -> bytes:
+    """Read an upload in chunks, rejecting it once it exceeds MAX_UPLOAD_BYTES."""
+    data = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        data.extend(chunk)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (limit {MAX_UPLOAD_BYTES // (1024 * 1024)}MB)",
+            )
+    return bytes(data)
+
+@app.on_event("startup")
+async def preload_models():
+    """Load the reranker in the background so the first query isn't slow."""
+    if os.getenv("PRELOAD_MODELS", "1") != "1":
+        return
+    from backend.chains.rerank_documents import preload_reranker
+
+    def _load():
+        try:
+            preload_reranker()
+        except Exception as e:  # first query will retry and surface the error
+            logger.warning(f"Reranker preload failed: {e}")
+
+    threading.Thread(target=_load, daemon=True).start()
 
 # Initialize components
 document_loader = MultiModalDocumentLoader()
@@ -75,8 +157,8 @@ class SessionAwareDocumentProcessor(DocumentProcessor):
                 'processed_at': datetime.now().isoformat(),
                 'status': 'success'
             }
-            session_manager.add_document_to_session(session_id, file_metadata)
-            
+            # The upload endpoint registers the document (with size and chunk data);
+            # adding it here as well listed every uploaded file twice.
             logger.info(f"File processed successfully for session {session_id}: {filename}")
             return {
                 'session_id': session_id,
@@ -191,8 +273,9 @@ class SessionAwareRAGWorkflow(RAGWorkflow):
             raise HTTPException(status_code=500, detail=f"Retriever error: {str(e)}")
         
         # Set retriever and session ID for this request
+        # Session id first: set_retriever builds the hybrid-search executor from it
+        self.set_session_id(session_id)
         self.set_retriever(retriever)
-        self.set_session_id(session_id)  # NEW: Set session ID for document access
         
         # Get conversation context (for future use)
         # context = session_manager.get_conversation_context(session_id)
@@ -224,7 +307,28 @@ class SessionAwareRAGWorkflow(RAGWorkflow):
         return result
 
 # **OPTIMIZATION: Initialize RAG workflow with document_processor for hybrid search support**
-rag_workflow = SessionAwareRAGWorkflow(document_processor=document_processor)
+# One workflow per session: the workflow keeps the active retriever, multi-tool
+# executor and session id on the instance, so sharing a single global instance
+# let concurrent requests from different sessions read each other's documents.
+_session_workflows: Dict[str, SessionAwareRAGWorkflow] = {}
+_session_workflows_lock = threading.Lock()
+
+
+def get_session_workflow(session_id: str) -> SessionAwareRAGWorkflow:
+    """Return the workflow bound to ``session_id``, creating it on first use."""
+    with _session_workflows_lock:
+        workflow = _session_workflows.get(session_id)
+        if workflow is None:
+            workflow = SessionAwareRAGWorkflow(document_processor=document_processor)
+            # Session id must be set before any retriever so hybrid search is enabled
+            workflow.set_session_id(session_id)
+            _session_workflows[session_id] = workflow
+        return workflow
+
+
+def drop_session_workflow(session_id: str) -> None:
+    with _session_workflows_lock:
+        _session_workflows.pop(session_id, None)
 
 # Initialize global metrics tracker for Phase 1
 metrics_tracker = RuntimeMetricsTracker()
@@ -269,6 +373,7 @@ async def get_session_info(session_id: str):
 async def end_session(session_id: str):
     """End session and cleanup resources"""
     session_manager.cleanup_session(session_id)
+    drop_session_workflow(session_id)
     return {"message": "Session ended successfully"}
 
 @app.delete("/api/session/{session_id}/document/{document_id}")
@@ -356,7 +461,7 @@ async def upload_document(
             )
         
         # Read file content
-        content = await file.read()
+        content = await read_upload_limited(file)
         file_size = len(content)
         
         # Create temporary file
@@ -443,7 +548,7 @@ async def upload_multiple_documents(
                     continue
                 
                 # Read file content
-                content = await file.read()
+                content = await read_upload_limited(file)
                 file_size = len(content)
                 
                 # Create temporary file
@@ -562,7 +667,7 @@ async def ask_question(request: QuestionRequest):
         start_time = time.time()
 
         # Process the question for session
-        result = rag_workflow.process_question_for_session(request.question, request.session_id)
+        result = get_session_workflow(request.session_id).process_question_for_session(request.question, request.session_id)
 
         # PHASE 1: Extract and log metrics from final state
         try:
@@ -687,8 +792,8 @@ async def ask_question_stream(request: QuestionRequest):
                 return
 
             # CRITICAL: Set session_id BEFORE retriever (multi_tool_executor depends on it)
-            rag_workflow.set_session_id(request.session_id)
-            rag_workflow.set_retriever(retriever)
+            workflow = get_session_workflow(request.session_id)
+            workflow.set_retriever(retriever)
 
             # Test retriever before streaming
             logger.info(f"Testing retriever for session {request.session_id}")
@@ -706,7 +811,7 @@ async def ask_question_stream(request: QuestionRequest):
             event_count = 0
             last_event = None  # Track last event for conversation saving
 
-            async for event in rag_workflow.process_question_stream(request.question):
+            async for event in workflow.process_question_stream(request.question):
                 event_count += 1
                 event_type = event.get("type", "unknown")
                 logger.info(f"📤 Streaming event #{event_count}: {event_type}")
@@ -778,7 +883,7 @@ async def get_supported_formats():
         "display": document_loader.get_supported_extensions_display()
     }
 
-@app.post("/api/clear-database")
+@app.post("/api/clear-database", dependencies=[Depends(require_admin)])
 async def clear_database():
     """
     Clear the FAISS database
@@ -796,7 +901,7 @@ async def clear_database():
         logger.error(f"Error clearing database: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/clear-all-collections")
+@app.post("/api/clear-all-collections", dependencies=[Depends(require_admin)])
 async def clear_all_collections():
     """
     Clear ALL FAISS indexes (for debugging purposes)
@@ -814,14 +919,14 @@ async def clear_all_collections():
         logger.error(f"Error clearing all collections: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/debug/collections")
+@app.get("/api/debug/collections", dependencies=[Depends(require_admin)])
 async def debug_collections():
     """
     Debug endpoint to check FAISS indexes and their contents
     """
     try:
         import os
-        from config import FAISS_INDEX_DIR
+        from backend.config import FAISS_INDEX_DIR
         
         result = {
             "total_indexes": 0,
@@ -866,7 +971,7 @@ async def debug_collections():
         logger.error(f"Error debugging collections: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/nuclear-reset")
+@app.post("/api/nuclear-reset", dependencies=[Depends(require_admin)])
 async def nuclear_reset():
     """
     Nuclear option: Completely delete and recreate FAISS database
@@ -875,7 +980,7 @@ async def nuclear_reset():
     try:
         import shutil
         import os
-        from config import FAISS_INDEX_DIR
+        from backend.config import FAISS_INDEX_DIR
         
         # Stop all sessions
         session_manager.active_sessions.clear()
@@ -899,7 +1004,7 @@ async def nuclear_reset():
 # PHASE 1: METRICS ENDPOINTS
 # ======================
 
-@app.get("/api/metrics/summary")
+@app.get("/api/metrics/summary", dependencies=[Depends(require_admin)])
 async def get_metrics_summary():
     """
     Get human-readable summary of all collected metrics
@@ -911,7 +1016,7 @@ async def get_metrics_summary():
         logger.error(f"Error getting metrics summary: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/metrics/aggregated")
+@app.get("/api/metrics/aggregated", dependencies=[Depends(require_admin)])
 async def get_aggregated_metrics():
     """
     Get aggregated metrics across all queries as structured JSON
@@ -924,7 +1029,7 @@ async def get_aggregated_metrics():
         logger.error(f"Error getting aggregated metrics: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/metrics/session/{session_id}")
+@app.get("/api/metrics/session/{session_id}", dependencies=[Depends(require_admin)])
 async def get_session_metrics(session_id: str):
     """
     Get metrics for a specific session
@@ -941,7 +1046,7 @@ async def get_session_metrics(session_id: str):
         logger.error(f"Error getting session metrics: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/metrics/sessions")
+@app.get("/api/metrics/sessions", dependencies=[Depends(require_admin)])
 async def get_all_session_metrics():
     """
     Get metrics for all sessions
@@ -964,7 +1069,7 @@ async def get_all_session_metrics():
         logger.error(f"Error getting all session metrics: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/metrics/queries")
+@app.get("/api/metrics/queries", dependencies=[Depends(require_admin)])
 async def get_all_query_metrics():
     """
     Get detailed metrics for all individual queries
@@ -980,7 +1085,7 @@ async def get_all_query_metrics():
         logger.error(f"Error getting query metrics: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/metrics/export")
+@app.post("/api/metrics/export", dependencies=[Depends(require_admin)])
 async def export_metrics(filepath: Optional[str] = None):
     """
     Export all metrics to a JSON file
@@ -995,7 +1100,7 @@ async def export_metrics(filepath: Optional[str] = None):
         logger.error(f"Error exporting metrics: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/metrics/clear")
+@app.post("/api/metrics/clear", dependencies=[Depends(require_admin)])
 async def clear_metrics():
     """
     Clear all collected metrics (useful for testing)
@@ -1025,12 +1130,12 @@ async def generate_ground_truth(
         num_questions: Number of Q&A pairs to generate (default: 20)
         document_name: Optional specific document name
 
-    Cost: ~$0.002 per 20 questions (Gemini Flash)
+    Cost: ~$0.002 per 20 questions (fallback LLM)
     """
     try:
         from backend.evaluation.ground_truth_generator import GroundTruthGenerator
         from backend.document_loader import MultiModalDocumentLoader
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         # Get session info
         session_info = session_manager.get_session_info(session_id)
@@ -1206,7 +1311,7 @@ async def evaluate_ragas_metrics(
 
         for qa_pair in qa_pairs:
             # Process question
-            result = rag_workflow.process_question_for_session(
+            result = get_session_workflow(session_id).process_question_for_session(
                 qa_pair['question'],
                 session_id
             )

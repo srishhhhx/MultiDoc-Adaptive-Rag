@@ -1,26 +1,17 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Standard LLM for non-streaming use
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0,
-    google_api_key=os.environ["GOOGLE_API_KEY"],
-)
+llm = get_llm("generate")
 
 # Streaming LLM for real-time token generation
-streaming_llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0,
-    google_api_key=os.environ["GOOGLE_API_KEY"],
-    streaming=True,  # Enable streaming mode
-)
+streaming_llm = get_llm("generate", streaming=True)
 
 # Custom RAG prompt for better answer generation
 system_prompt = """You are an expert assistant specializing in answering questions based on provided documents. Your goal is to provide accurate, helpful, and well-structured answers that directly address the user's question.

@@ -10,7 +10,7 @@ Key Features:
 - Automatic retry with exponential backoff
 - Latency tracking and metrics
 - Structured JSON output parsing
-- Fallback to Gemini on failures
+- Fallback to fallback LLM on failures
 - Type-safe responses with Pydantic
 
 Usage:
@@ -125,7 +125,7 @@ class GroqModelClient:
             api_key: Groq API key (defaults to GROQ_API_KEY env var)
             timeout: Request timeout in seconds
             max_retries: Maximum retry attempts
-            enable_fallback: Whether to fallback to Gemini on failures
+            enable_fallback: Whether to fallback to fallback LLM on failures
         """
         self.model_name = model_name
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
@@ -279,9 +279,9 @@ class GroqModelClient:
             
             # Try fallback if enabled
             if self.enable_fallback:
-                logger.warning("🔄 Attempting fallback to Gemini...")
+                logger.warning("🔄 Attempting fallback to fallback LLM...")
                 try:
-                    response_text, fallback_metrics = self._fallback_to_gemini(
+                    response_text, fallback_metrics = self._fallback_to_llm(
                         prompt, temperature, max_tokens
                     )
                     fallback_metrics.fallback_used = True
@@ -371,9 +371,9 @@ class GroqModelClient:
             
             # Try fallback if enabled
             if self.enable_fallback:
-                logger.warning("🔄 Attempting fallback to Gemini...")
+                logger.warning("🔄 Attempting fallback to fallback LLM...")
                 try:
-                    response_text, fallback_metrics = self._fallback_to_gemini(
+                    response_text, fallback_metrics = self._fallback_to_llm(
                         prompt, temperature, max_tokens
                     )
                     fallback_metrics.fallback_used = True
@@ -484,14 +484,14 @@ class GroqModelClient:
             logger.debug(f"Raw response: {response_text[:200]}...")
             raise GroqAPIError(f"Failed to parse JSON response: {e}") from e
     
-    def _fallback_to_gemini(
+    def _fallback_to_llm(
         self,
         prompt: str,
         temperature: float,
         max_tokens: int
     ) -> tuple[str, InferenceMetrics]:
         """
-        Fallback to Gemini Flash when Groq fails.
+        Fallback to fallback LLM Flash when Groq fails.
         
         Args:
             prompt: Input prompt
@@ -501,18 +501,13 @@ class GroqModelClient:
         Returns:
             Tuple of (response_text, metrics)
         """
-        from langchain_google_genai import ChatGoogleGenerativeAI
+        from backend.llm import get_llm
         from langchain_core.output_parsers import StrOutputParser
         
         start_time = time.time()
         
         try:
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash-exp",
-                google_api_key=os.environ["GOOGLE_API_KEY"],
-                temperature=temperature,
-                max_output_tokens=max_tokens
-            )
+            llm = get_llm("fallback").bind(temperature=temperature, max_tokens=max_tokens)
             
             chain = llm | StrOutputParser()
             response = chain.invoke(prompt)
@@ -520,20 +515,20 @@ class GroqModelClient:
             latency_ms = (time.time() - start_time) * 1000
             
             metrics = InferenceMetrics(
-                model_name="gemini-1.5-flash (fallback)",
+                model_name="fallback-llm",
                 latency_ms=latency_ms,
-                prompt_tokens=0,  # Gemini doesn't provide token counts easily
+                prompt_tokens=0,  # token counts not tracked for fallback
                 completion_tokens=0,
                 total_tokens=0,
                 success=True,
                 fallback_used=True
             )
             
-            logger.info(f"✅ Gemini fallback successful ({latency_ms:.0f}ms)")
+            logger.info(f"✅ fallback LLM fallback successful ({latency_ms:.0f}ms)")
             return response, metrics
             
         except Exception as e:
-            logger.error(f"❌ Gemini fallback failed: {e}")
+            logger.error(f"❌ fallback LLM fallback failed: {e}")
             raise
     
     def close(self):

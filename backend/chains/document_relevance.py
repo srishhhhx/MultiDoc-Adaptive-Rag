@@ -2,18 +2,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from langchain_core.runnables import RunnableSequence
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
+from backend.llm import get_llm, structured
 
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",  # or "gemini-1.5-pro" if you want the faster/lighter one
-    temperature=0,
-    google_api_key=os.environ["GOOGLE_API_KEY"],
-)
+llm = get_llm("evaluate")
 
 
 class DocumentRelevance(BaseModel):
@@ -36,7 +32,7 @@ class DocumentRelevance(BaseModel):
     )
 
 
-structured_output = llm.with_structured_output(DocumentRelevance)
+structured_output = structured(llm, DocumentRelevance)
 
 system = """You are an expert document relevance evaluator. Your task is to determine whether an LLM-generated answer is properly grounded in the provided source documents.
 
